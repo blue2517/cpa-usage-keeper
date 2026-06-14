@@ -55,15 +55,23 @@ func calculateOpenAIStyleUsageTokenCostBreakdown(input UsageTokenCostInput, pric
 }
 
 func calculateClaudeUsageTokenCostBreakdown(input UsageTokenCostInput, pricing entities.ModelPriceSetting) UsageTokenCostBreakdown {
-	normalInputTokens := input.InputTokens - input.CacheReadTokens - input.CacheCreationTokens
+	cacheRead := input.CacheReadTokens
+	cacheCreate := input.CacheCreationTokens
+	// Non-Claude providers (Gemini/Antigravity) store cache hits in CachedTokens
+	// instead of CacheReadTokens/CacheCreationTokens. Treat CachedTokens as cache
+	// reads when the split fields are absent.
+	if cacheRead == 0 && cacheCreate == 0 && input.CachedTokens > 0 {
+		cacheRead = input.CachedTokens
+	}
+	normalInputTokens := input.InputTokens - cacheRead - cacheCreate
 	if normalInputTokens < 0 {
 		normalInputTokens = 0
 	}
 	breakdown := UsageTokenCostBreakdown{
 		InputCostUSD:  (float64(normalInputTokens) / 1_000_000.0) * pricing.PromptPricePer1M,
 		OutputCostUSD: (float64(input.OutputTokens) / 1_000_000.0) * pricing.CompletionPricePer1M,
-		CachedCostUSD: (float64(input.CacheReadTokens)/1_000_000.0)*pricing.CachePricePer1M +
-			(float64(input.CacheCreationTokens)/1_000_000.0)*pricing.CacheCreationPricePer1M,
+		CachedCostUSD: (float64(cacheRead)/1_000_000.0)*pricing.CachePricePer1M +
+			(float64(cacheCreate)/1_000_000.0)*pricing.CacheCreationPricePer1M,
 	}
 	breakdown.TotalCostUSD = breakdown.InputCostUSD + breakdown.OutputCostUSD + breakdown.CachedCostUSD
 	return breakdown
