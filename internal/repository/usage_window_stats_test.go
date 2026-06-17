@@ -145,7 +145,7 @@ func TestSumLongUsageWindowTokenStatsDoesNotDoubleCountWhenBoundaryClips(t *test
 		t.Fatalf("seed usage event: %v", err)
 	}
 
-	rows, err := sumLongUsageWindowTokenStats(db, "auth-1", start, end)
+	rows, err := sumLongUsageWindowTokenStats(db, "auth-1", start, end, modelWindowFilter{})
 	if err != nil {
 		t.Fatalf("sumLongUsageWindowTokenStats returned error: %v", err)
 	}
@@ -199,5 +199,55 @@ func TestSumUsageWindowStatsByAuthIndexTreatsMissingPriceAsZeroCost(t *testing.T
 	}
 	if stats.Tokens != 1_000_000 || stats.Cost != 0 {
 		t.Fatalf("expected tokens with zero missing-price cost, got %+v", stats)
+	}
+}
+
+func TestSumUsageWindowStatsByAuthIndexAndModelsFiltersByModelSet(t *testing.T) {
+	db, err := OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "usage-window-stats-model-filter.db")})
+	if err != nil {
+		t.Fatalf("OpenDatabase returned error: %v", err)
+	}
+	closeTestDatabase(t, db)
+	if _, err := UpsertModelPriceSetting(db, dto.ModelPriceSettingInput{Model: "gemini-3-pro-high", PromptPricePer1M: 10}); err != nil {
+		t.Fatalf("UpsertModelPriceSetting gemini returned error: %v", err)
+	}
+	if _, err := UpsertModelPriceSetting(db, dto.ModelPriceSettingInput{Model: "claude-opus-4-6-thinking", PromptPricePer1M: 30}); err != nil {
+		t.Fatalf("UpsertModelPriceSetting claude returned error: %v", err)
+	}
+	start := time.Date(2026, 5, 25, 10, 0, 0, 0, time.UTC)
+	end := start.Add(time.Hour)
+	events := []entities.UsageEvent{
+		{AuthIndex: "auth-1", Model: "gemini-3-pro-high", Timestamp: start.Add(10 * time.Minute), InputTokens: 1_000_000, TotalTokens: 1_000_000},
+		{AuthIndex: "auth-1", Model: "claude-opus-4-6-thinking", Timestamp: start.Add(20 * time.Minute), InputTokens: 2_000_000, TotalTokens: 2_000_000},
+	}
+	if err := db.Create(&events).Error; err != nil {
+		t.Fatalf("seed usage events: %v", err)
+	}
+
+	// Gemini pool only counts the gemini model: 1M tokens @ $10/1M = $10.
+	stats, err := SumUsageWindowStatsByAuthIndexAndModels(context.Background(), db, "auth-1", start, &end, []string{"gemini-3-pro-high"})
+	if err != nil {
+		t.Fatalf("SumUsageWindowStatsByAuthIndexAndModels gemini returned error: %v", err)
+	}
+	if stats.Tokens != 1_000_000 || stats.Cost != 10 {
+		t.Fatalf("expected gemini-only stats {1000000, 10}, got %+v", stats)
+	}
+
+	// Third-party pool only counts the claude model: 2M tokens @ $30/1M = $60.
+	stats, err = SumUsageWindowStatsByAuthIndexAndModels(context.Background(), db, "auth-1", start, &end, []string{"claude-opus-4-6-thinking"})
+	if err != nil {
+		t.Fatalf("SumUsageWindowStatsByAuthIndexAndModels claude returned error: %v", err)
+	}
+	if stats.Tokens != 2_000_000 || stats.Cost != 60 {
+		t.Fatalf("expected claude-only stats {2000000, 60}, got %+v", stats)
+	}
+
+	// Empty filter falls back to all models: 3M tokens, $70.
+	stats, err = SumUsageWindowStatsByAuthIndexAndModels(context.Background(), db, "auth-1", start, &end, nil)
+	if err != nil {
+		t.Fatalf("SumUsageWindowStatsByAuthIndexAndModels all returned error: %v", err)
+	}
+	if stats.Tokens != 3_000_000 || stats.Cost != 70 {
+		t.Fatalf("expected all-model stats {3000000, 70}, got %+v", stats)
 	}
 }

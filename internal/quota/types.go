@@ -44,6 +44,10 @@ type QuotaRow struct {
 	ResetAfterSeconds *int64       `json:"resetAfterSeconds,omitempty"`
 	WindowUsageTokens *int64       `json:"window_usage_tokens,omitempty"`
 	WindowUsageCost   *float64     `json:"window_usage_cost,omitempty"`
+	// ModelFilter limits window token/cost backfill to a specific set of models.
+	// Used by Antigravity pool rows whose 5h/weekly usage must only count one pool's
+	// models. Empty means no model restriction. Never serialized to the frontend.
+	ModelFilter []string `json:"-"`
 }
 
 type AntigravityQuotaInfo struct {

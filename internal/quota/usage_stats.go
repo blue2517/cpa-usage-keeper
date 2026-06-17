@@ -2,6 +2,7 @@ package quota
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"time"
 
@@ -10,8 +11,9 @@ import (
 )
 
 type quotaUsageWindowKey struct {
-	start time.Time
-	end   time.Time
+	start  time.Time
+	end    time.Time
+	models string
 }
 
 func (s *Service) attachWindowUsageStats(ctx context.Context, authIndex string, response CheckResponse, now time.Time) CheckResponse {
@@ -39,16 +41,18 @@ func (s *Service) attachWindowUsageStats(ctx context.Context, authIndex string, 
 			// 跳过后该 row 不展示窗口 token/cost。
 			continue
 		}
-		// start/end 组成窗口缓存 key，避免同一响应内重复查同一窗口。
-		key := quotaUsageWindowKey{start: windowStart, end: windowEnd}
+		// 模型过滤集合参与缓存 key，避免不同池（如 Gemini / Claude·GPT）窗口统计互相串用。
+		modelFilter := response.Quota[index].ModelFilter
+		// start/end + 模型集合组成窗口缓存 key，避免同一响应内重复查同一窗口。
+		key := quotaUsageWindowKey{start: windowStart, end: windowEnd, models: modelFilterCacheKey(modelFilter)}
 		// 先尝试复用本次响应内已经查询过的窗口统计。
 		stats, ok := statsByWindow[key]
 		// 没有缓存时才真正查询 repository。
 		if !ok {
 			// repository 内部会按窗口长度选择 raw group by 或 hourly rollup。
 			var err error
-			// 调用窗口统计查询，end 使用半开区间避免重复累计边界事件。
-			stats, err = repository.SumUsageWindowStatsByAuthIndex(ctx, s.db, authIndex, windowStart, &windowEnd)
+			// 调用窗口统计查询，end 使用半开区间避免重复累计边界事件；池级 row 按模型集合过滤。
+			stats, err = repository.SumUsageWindowStatsByAuthIndexAndModels(ctx, s.db, authIndex, windowStart, &windowEnd, modelFilter)
 			// 统计失败不影响 quota 主结果，只跳过当前窗口用量展示。
 			if err != nil {
 				// 当前 row 不写 token/cost，继续处理其它 row。
@@ -86,6 +90,17 @@ func shouldBackfillWindowUsageStats(row QuotaRow) bool {
 	default:
 		return false
 	}
+}
+
+func modelFilterCacheKey(models []string) string {
+	// 空过滤集合统一映射成空 key，对应“不限制模型”的全量窗口统计。
+	if len(models) == 0 {
+		return ""
+	}
+	// 排序后拼接，保证相同模型集合无论顺序如何都命中同一缓存条目。
+	sorted := append([]string(nil), models...)
+	sort.Strings(sorted)
+	return strings.Join(sorted, "\x00")
 }
 
 func quotaRowUsageWindow(row QuotaRow, now time.Time) (time.Time, time.Time, bool) {

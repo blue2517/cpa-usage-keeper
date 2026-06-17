@@ -31,6 +31,15 @@ type usageWindowTokenStats struct {
 }
 
 func SumUsageWindowStatsByAuthIndex(ctx context.Context, db *gorm.DB, authIndex string, start time.Time, end *time.Time) (UsageWindowStats, error) {
+	// 无模型过滤时复用带过滤版本，保持旧调用方语义不变。
+	return SumUsageWindowStatsByAuthIndexAndModels(ctx, db, authIndex, start, end, nil)
+}
+
+// SumUsageWindowStatsByAuthIndexAndModels mirrors SumUsageWindowStatsByAuthIndex but
+// optionally restricts the aggregation to a set of models. An empty models slice
+// means no model restriction. Antigravity pool rows use this to count only one
+// pool's models (Gemini vs third-party) within a 5h/weekly window.
+func SumUsageWindowStatsByAuthIndexAndModels(ctx context.Context, db *gorm.DB, authIndex string, start time.Time, end *time.Time, models []string) (UsageWindowStats, error) {
 	// 数据库句柄为空时直接返回错误，避免后续查询 panic。
 	if db == nil {
 		// 返回明确错误，调用方可以按普通统计失败处理。
@@ -54,8 +63,10 @@ func SumUsageWindowStatsByAuthIndex(ctx context.Context, db *gorm.DB, authIndex 
 		// 保留底层错误，方便定位数据库或迁移问题。
 		return UsageWindowStats{}, err
 	}
+	// 模型过滤集合先归一化，去除空白和重复，空集合表示不限制模型。
+	modelFilter := normalizeModelFilter(models)
 	// 根据窗口长度选择 raw-only 或 hourly-rollup 查询计划。
-	rows, err := loadUsageWindowTokenStats(queryDB, authIndex, start, end)
+	rows, err := loadUsageWindowTokenStats(queryDB, authIndex, start, end, modelFilter)
 	// 任意一段查询失败都返回错误，调用方会跳过本次窗口补充。
 	if err != nil {
 		// 给错误包上业务上下文，方便日志识别失败位置。
@@ -65,16 +76,75 @@ func SumUsageWindowStatsByAuthIndex(ctx context.Context, db *gorm.DB, authIndex 
 	return usageWindowStatsFromTokenStats(rows, pricingByModel), nil
 }
 
-func loadUsageWindowTokenStats(db *gorm.DB, authIndex string, start time.Time, end *time.Time) ([]usageWindowTokenStats, error) {
+// AntigravityPoolModelLike is the SQL LIKE pattern that matches Gemini-pool models.
+// Models matching it belong to the Gemini pool; the rest belong to the third-party pool.
+const AntigravityPoolModelLike = "%gemini%"
+
+// SumUsageWindowStatsByAuthIndexAndPoolGemini sums window token/cost for one auth,
+// restricted to either the Gemini pool (geminiPool=true) or the third-party pool
+// (geminiPool=false). Antigravity weekly-cap accumulation uses this because the
+// detector only knows the pool classification rule, not an explicit model list.
+func SumUsageWindowStatsByAuthIndexAndPoolGemini(ctx context.Context, db *gorm.DB, authIndex string, start time.Time, end *time.Time, geminiPool bool) (UsageWindowStats, error) {
+	if db == nil {
+		return UsageWindowStats{}, fmt.Errorf("database is nil")
+	}
+	authIndex = strings.TrimSpace(authIndex)
+	if authIndex == "" {
+		return UsageWindowStats{}, fmt.Errorf("auth_index is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	queryDB := db.WithContext(ctx)
+	pricingByModel, err := loadPriceSettingsByModel(queryDB)
+	if err != nil {
+		return UsageWindowStats{}, err
+	}
+	rows, err := loadUsageWindowTokenStatsWithPool(queryDB, authIndex, start, end, &geminiPool)
+	if err != nil {
+		return UsageWindowStats{}, err
+	}
+	return usageWindowStatsFromTokenStats(rows, pricingByModel), nil
+}
+
+func loadUsageWindowTokenStats(db *gorm.DB, authIndex string, start time.Time, end *time.Time, models []string) ([]usageWindowTokenStats, error) {
+	return loadUsageWindowTokenStatsFiltered(db, authIndex, start, end, modelWindowFilter{models: models})
+}
+
+func loadUsageWindowTokenStatsWithPool(db *gorm.DB, authIndex string, start time.Time, end *time.Time, geminiPool *bool) ([]usageWindowTokenStats, error) {
+	return loadUsageWindowTokenStatsFiltered(db, authIndex, start, end, modelWindowFilter{geminiPool: geminiPool})
+}
+
+// modelWindowFilter carries an optional model restriction for window aggregation:
+// either an explicit model set or an Antigravity Gemini/third-party pool predicate.
+type modelWindowFilter struct {
+	models     []string
+	geminiPool *bool
+}
+
+func applyModelWindowFilter(query *gorm.DB, filter modelWindowFilter) *gorm.DB {
+	if len(filter.models) > 0 {
+		query = query.Where("model IN ?", filter.models)
+	}
+	if filter.geminiPool != nil {
+		if *filter.geminiPool {
+			query = query.Where("LOWER(model) LIKE ?", AntigravityPoolModelLike)
+		} else {
+			query = query.Where("LOWER(model) NOT LIKE ?", AntigravityPoolModelLike)
+		}
+	}
+	return query
+}
+
+func loadUsageWindowTokenStatsFiltered(db *gorm.DB, authIndex string, start time.Time, end *time.Time, filter modelWindowFilter) ([]usageWindowTokenStats, error) {
 	// 空时间无法表达有效 quota 窗口，提前返回避免误构造超宽时间范围。
 	if start.IsZero() || (end != nil && end.IsZero()) {
 		// 返回空结果而不是错误，调用方会把它当作“该窗口暂无用量”。
 		return nil, nil
 	}
-	// 没有结束时间时只能走 raw 查询，保持“从 start 到当前已有数据”的旧语义。
+	// 没有结束时间时只能走 raw 查询，保持”从 start 到当前已有数据”的旧语义。
 	if end == nil {
-		// raw 查询本身会按 model group by，不再逐条读 usage_events。
-		return sumRawUsageWindowTokenStats(db, authIndex, start, nil)
+		return sumRawUsageWindowTokenStats(db, authIndex, start, nil, filter)
 	}
 	// 结束时间归一化为存储时区，避免和 SQLite 文本时间比较口径不一致。
 	windowEnd := timeutil.NormalizeStorageTime(*end)
@@ -87,14 +157,13 @@ func loadUsageWindowTokenStats(db *gorm.DB, authIndex string, start time.Time, e
 	}
 	// 5 小时及以内直接查 raw，避免小窗口为了 rollup 多打几次数据库。
 	if windowEnd.Sub(windowStart) <= quotaWindowRawOnlyThreshold {
-		// raw 查询会使用 auth_index + timestamp 范围索引，并在 SQL 内完成 model 聚合。
-		return sumRawUsageWindowTokenStats(db, authIndex, windowStart, &windowEnd)
+		return sumRawUsageWindowTokenStats(db, authIndex, windowStart, &windowEnd, filter)
 	}
 	// 长窗口拆成边界 raw 和中间完整小时 rollup，降低真实高频数据下的扫描行数。
-	return sumLongUsageWindowTokenStats(db, authIndex, windowStart, windowEnd)
+	return sumLongUsageWindowTokenStats(db, authIndex, windowStart, windowEnd, filter)
 }
 
-func sumLongUsageWindowTokenStats(db *gorm.DB, authIndex string, start time.Time, end time.Time) ([]usageWindowTokenStats, error) {
+func sumLongUsageWindowTokenStats(db *gorm.DB, authIndex string, start time.Time, end time.Time, filter modelWindowFilter) ([]usageWindowTokenStats, error) {
 	// 左边界结束点取 start 之后的第一个整点，只有非整点部分才需要 raw 补偿。
 	leftEnd := ceilUsageWindowHour(start)
 	// 如果窗口不到左边界整点就结束，左边界最多只能补到 end。
@@ -129,7 +198,7 @@ func sumLongUsageWindowTokenStats(db *gorm.DB, authIndex string, start time.Time
 	// 左边界存在时读取 usage_events 边界段。
 	if start.Before(leftEnd) {
 		// 查询左边界 raw 聚合，最多覆盖不足一小时的数据。
-		rows, err := sumRawUsageWindowTokenStats(db, authIndex, start, &leftEnd)
+		rows, err := sumRawUsageWindowTokenStats(db, authIndex, start, &leftEnd, filter)
 		// 左边界查询失败时直接返回，避免展示半截统计。
 		if err != nil {
 			// 包装左边界错误，便于测试和日志定位。
@@ -141,7 +210,7 @@ func sumLongUsageWindowTokenStats(db *gorm.DB, authIndex string, start time.Time
 	// 中间存在完整小时时读取 hourly rollup。
 	if hourlyStart.Before(hourlyEnd) {
 		// 查询完整小时 rollup 聚合，避免扫描 7 天 raw events。
-		rows, err := sumHourlyUsageWindowTokenStats(db, authIndex, hourlyStart, hourlyEnd)
+		rows, err := sumHourlyUsageWindowTokenStats(db, authIndex, hourlyStart, hourlyEnd, filter)
 		// hourly 查询失败时直接返回，避免展示半截统计。
 		if err != nil {
 			// 包装 hourly 错误，便于区分 raw 和 rollup 问题。
@@ -153,7 +222,7 @@ func sumLongUsageWindowTokenStats(db *gorm.DB, authIndex string, start time.Time
 	// 右边界存在时读取 usage_events 尾部段。
 	if rightStart.Before(end) {
 		// 查询右边界 raw 聚合，覆盖最后一个完整小时之后的数据。
-		rows, err := sumRawUsageWindowTokenStats(db, authIndex, rightStart, &end)
+		rows, err := sumRawUsageWindowTokenStats(db, authIndex, rightStart, &end, filter)
 		// 右边界查询失败时直接返回，避免展示半截统计。
 		if err != nil {
 			// 包装右边界错误，便于测试和日志定位。
@@ -166,48 +235,32 @@ func sumLongUsageWindowTokenStats(db *gorm.DB, authIndex string, start time.Time
 	return usageWindowTokenStatsValues(merged), nil
 }
 
-func sumRawUsageWindowTokenStats(db *gorm.DB, authIndex string, start time.Time, end *time.Time) ([]usageWindowTokenStats, error) {
-	// raw 查询只取 model 级汇总字段，避免把大量 usage_events 行读进 Go 内存。
+func sumRawUsageWindowTokenStats(db *gorm.DB, authIndex string, start time.Time, end *time.Time, filter modelWindowFilter) ([]usageWindowTokenStats, error) {
 	query := db.Model(&entities.UsageEvent{}).
-		// SELECT 中只聚合 token/cost 需要的字段，不读取 raw_json 等大字段。
 		Select("model, COALESCE(SUM(total_tokens), 0) AS total_tokens, COALESCE(SUM(input_tokens), 0) AS input_tokens, COALESCE(SUM(output_tokens), 0) AS output_tokens, COALESCE(SUM(cached_tokens), 0) AS cached_tokens, COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens, COALESCE(SUM(cache_creation_tokens), 0) AS cache_creation_tokens").
-		// auth_index 已经是唯一身份维度，这里不再额外按 auth_type 过滤。
 		Where("auth_index = ? AND timestamp >= ?", authIndex, timeutil.FormatStorageTime(start)).
-		// 按 model 分组，后续按 model 价格表计算 cost。
 		Group("model")
-	// 如果调用方传入结束时间，就用半开区间避免边界重复累计。
 	if end != nil {
-		// end 统一格式化为 storage time，确保 SQLite 文本比较稳定。
 		query = query.Where("timestamp < ?", timeutil.FormatStorageTime(*end))
 	}
-	// rows 只承接聚合后的少量 model 行。
+	query = applyModelWindowFilter(query, filter)
 	var rows []usageWindowTokenStats
-	// 执行 SQL 聚合查询。
 	if err := query.Scan(&rows).Error; err != nil {
-		// 包装 raw 查询错误，保留调用上下文。
 		return nil, fmt.Errorf("sum raw usage window stats: %w", err)
 	}
-	// 返回 model 级 token 汇总。
 	return rows, nil
 }
 
-func sumHourlyUsageWindowTokenStats(db *gorm.DB, authIndex string, start time.Time, end time.Time) ([]usageWindowTokenStats, error) {
-	// hourly 查询直接读取 overview 已经维护好的小时增量表。
+func sumHourlyUsageWindowTokenStats(db *gorm.DB, authIndex string, start time.Time, end time.Time, filter modelWindowFilter) ([]usageWindowTokenStats, error) {
 	query := db.Model(&entities.UsageOverviewHourlyStat{}).
-		// SELECT 中聚合 token/cost 需要的字段，保持和 raw 查询返回结构一致。
 		Select("model, COALESCE(SUM(total_tokens), 0) AS total_tokens, COALESCE(SUM(input_tokens), 0) AS input_tokens, COALESCE(SUM(output_tokens), 0) AS output_tokens, COALESCE(SUM(cached_tokens), 0) AS cached_tokens, COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens, COALESCE(SUM(cache_creation_tokens), 0) AS cache_creation_tokens").
-		// auth_index + bucket_start 范围可以使用现有 hourly auth_bucket 索引。
 		Where("auth_index = ? AND bucket_start >= ? AND bucket_start < ?", authIndex, timeutil.FormatStorageTime(start), timeutil.FormatStorageTime(end)).
-		// 按 model 分组，后续按 model 价格表计算 cost。
 		Group("model")
-	// rows 只承接聚合后的少量 model 行。
+	query = applyModelWindowFilter(query, filter)
 	var rows []usageWindowTokenStats
-	// 执行 hourly 聚合查询。
 	if err := query.Scan(&rows).Error; err != nil {
-		// 包装 hourly 查询错误，保留调用上下文。
 		return nil, fmt.Errorf("sum hourly usage window stats: %w", err)
 	}
-	// 返回 model 级 token 汇总。
 	return rows, nil
 }
 
@@ -269,6 +322,32 @@ func usageWindowStatsFromTokenStats(rows []usageWindowTokenStats, pricingByModel
 	}
 	// 返回最终窗口统计。
 	return stats
+}
+
+func normalizeModelFilter(models []string) []string {
+	// 空输入直接返回 nil，下游按“不限制模型”处理。
+	if len(models) == 0 {
+		return nil
+	}
+	// 用 set 去重，避免同一 model 多次出现导致 IN 列表冗长。
+	seen := make(map[string]struct{}, len(models))
+	filter := make([]string, 0, len(models))
+	for _, model := range models {
+		trimmed := strings.TrimSpace(model)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		filter = append(filter, trimmed)
+	}
+	// 全是空白时退化为不限制模型。
+	if len(filter) == 0 {
+		return nil
+	}
+	return filter
 }
 
 func ceilUsageWindowHour(value time.Time) time.Time {

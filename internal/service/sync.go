@@ -9,6 +9,7 @@ import (
 	"cpa-usage-keeper/internal/config"
 	"cpa-usage-keeper/internal/cpa"
 	"cpa-usage-keeper/internal/entities"
+	"cpa-usage-keeper/internal/quota"
 	"cpa-usage-keeper/internal/repository"
 	"cpa-usage-keeper/internal/timeutil"
 
@@ -196,10 +197,10 @@ func (s *SyncService) processRedisInboxRows(ctx context.Context, inboxRows []ent
 	logrus.WithField("row_count", len(inboxRows)).Debug("redis usage inbox processing started")
 	validRows := make([]entities.RedisUsageInbox, 0, len(inboxRows))
 	events := make([]entities.UsageEvent, 0, len(inboxRows))
+	failDetails := make([]queuedUsageFail, 0, len(inboxRows))
 	decodeErrs := make([]error, 0)
-	// 先完整解码本批数据，坏消息单独标记，不阻断同批其它可用消息。
 	for _, row := range inboxRows {
-		event, _, decodeErr := DecodeRedisUsageMessage(row.RawMessage, fetchedAt)
+		event, fail, _, decodeErr := DecodeRedisUsageMessageWithFail(row.RawMessage, fetchedAt)
 		if decodeErr != nil {
 			logrus.WithError(decodeErr).WithField("inbox_id", row.ID).Error("redis usage message decode failed")
 			if markErr := repository.MarkRedisUsageInboxDecodeFailed(s.db, row.ID, decodeErr); markErr != nil {
@@ -210,6 +211,7 @@ func (s *SyncService) processRedisInboxRows(ctx context.Context, inboxRows []ent
 		}
 		validRows = append(validRows, row)
 		events = append(events, event)
+		failDetails = append(failDetails, fail)
 	}
 	decodeErr := joinErrors(decodeErrs...)
 	logrus.WithFields(logrus.Fields{
@@ -258,12 +260,10 @@ func (s *SyncService) processRedisInboxRows(ctx context.Context, inboxRows []ent
 		return &servicedto.RedisBatchSyncResult{Status: "failed"}, err
 	}
 	if result.InsertedEvents > 0 {
-		// usage_events 事务已经提交后才通知最近事件缓存，避免缓存看到未落库的数据。
 		if s.recentUsage != nil && !s.recentUsage.TryAppend(events) {
-			// 缓存队列满只影响 realtime/边界缓存的新鲜度，不能反向阻塞或回滚写入链路。
 			logrus.WithField("event_count", len(events)).Warn("recent usage event cache append skipped")
 		}
-		// Redis process 是 usage_events 的高频写入入口，成功插入后串行刷新依赖事件表的增量统计。
+		s.detectAntigravityWeeklyExhaustion(ctx, events, failDetails)
 		if err := s.aggregateUsageEventStats(ctx, timeutil.NormalizeStorageTime(s.now())); err != nil {
 			return &servicedto.RedisBatchSyncResult{Status: "failed"}, err
 		}
@@ -452,6 +452,34 @@ func resolveUsageEventType(event entities.UsageEvent, resolver usageEventTypeRes
 		return strings.TrimSpace(resolver.byIdentity[key])
 	default:
 		return "openai"
+	}
+}
+
+// detectAntigravityWeeklyExhaustion scans a batch of persisted events for Antigravity
+// weekly-cap exhaustion signals and locks the estimated weekly limit when detected.
+// Errors are logged but do not fail the ingestion batch.
+func (s *SyncService) detectAntigravityWeeklyExhaustion(ctx context.Context, events []entities.UsageEvent, fails []queuedUsageFail) {
+	for i, event := range events {
+		if i >= len(fails) {
+			break
+		}
+		fail := fails[i]
+		if fail.StatusCode == 0 {
+			continue
+		}
+		if err := quota.HandleAntigravityWeeklyExhaustion(ctx, s.db, quota.AntigravityWeeklyExhaustionEvent{
+			AuthIndex:      event.AuthIndex,
+			Model:          event.Model,
+			Timestamp:      event.Timestamp,
+			FailStatusCode: fail.StatusCode,
+			FailBody:       fail.Body,
+			ExecutorType:   event.ExecutorType,
+		}); err != nil {
+			logrus.WithError(err).WithFields(logrus.Fields{
+				"auth_index": event.AuthIndex,
+				"model":      event.Model,
+			}).Warn("antigravity weekly exhaustion detection failed")
+		}
 	}
 }
 

@@ -81,6 +81,45 @@ func TestDecodeRedisUsageMessageFallsBackToProviderWhenAPIKeyIsBlank(t *testing.
 	}
 }
 
+func TestDecodeRedisUsageMessageWithFailExtractsFailDetail(t *testing.T) {
+	fetchedAt := time.Date(2026, 6, 15, 8, 0, 0, 0, time.UTC)
+	event, fail, _, err := DecodeRedisUsageMessageWithFail(`{
+		"request_id":"req-fail-1",
+		"auth_index":"auth-ag",
+		"model":"gemini-3-pro-high",
+		"executor_type":"AntigravityExecutor",
+		"failed":true,
+		"fail":{"status_code":429,"body":"{\"error\":{\"status\":\"RESOURCE_EXHAUSTED\",\"message\":\"QUOTA_EXHAUSTED\"}}"}
+	}`, fetchedAt)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if event.AuthIndex != "auth-ag" || event.Model != "gemini-3-pro-high" {
+		t.Fatalf("unexpected event fields: %+v", event)
+	}
+	if fail.StatusCode != 429 {
+		t.Fatalf("expected fail status 429, got %d", fail.StatusCode)
+	}
+	if !strings.Contains(fail.Body, "QUOTA_EXHAUSTED") {
+		t.Fatalf("expected fail body to contain QUOTA_EXHAUSTED, got %q", fail.Body)
+	}
+}
+
+func TestDecodeRedisUsageMessageWithFailReturnsEmptyFailWhenAbsent(t *testing.T) {
+	fetchedAt := time.Date(2026, 6, 15, 8, 0, 0, 0, time.UTC)
+	_, fail, _, err := DecodeRedisUsageMessageWithFail(`{
+		"request_id":"req-ok-1",
+		"auth_index":"auth-ag",
+		"model":"gemini-3-pro-high"
+	}`, fetchedAt)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if fail.StatusCode != 0 || fail.Body != "" {
+		t.Fatalf("expected empty fail, got %+v", fail)
+	}
+}
+
 func TestDecodeRedisUsageMessageReportsOnlyMessageError(t *testing.T) {
 	_, _, err := DecodeRedisUsageMessage(`{bad-json}`, time.Date(2026, 4, 27, 8, 0, 0, 0, time.UTC))
 	if err == nil || !strings.Contains(err.Error(), "decode redis usage message") {

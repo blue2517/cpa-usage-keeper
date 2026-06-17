@@ -251,9 +251,13 @@ func (s *Service) Check(ctx context.Context, request CheckRequest) (CheckRespons
 	if err != nil {
 		return CheckResponse{}, err
 	}
+	rows := NormalizeQuotaRows(providerOutput)
+	if providerOutput.Provider == "antigravity" {
+		rows = s.appendAntigravityWeeklyRows(ctx, authIndex, rows)
+	}
 	return CheckResponse{
 		ID:    authIndex,
-		Quota: NormalizeQuotaRows(providerOutput),
+		Quota: rows,
 	}, nil
 }
 

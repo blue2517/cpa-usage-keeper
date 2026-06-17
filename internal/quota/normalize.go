@@ -291,7 +291,9 @@ func normalizeAntigravityQuotaRows(result AntigravityResult) []QuotaRow {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	rows := make([]QuotaRow, 0, len(keys))
+	rows := make([]QuotaRow, 0, len(keys)+2)
+	// 按池聚合各模型的已用%、最近 reset 时间和模型集合，用于生成池级 5h 额度估算行。
+	pools := map[AntigravityPool]*antigravityPoolAccumulator{}
 	for _, key := range keys {
 		model := result.Quota.Models[key]
 		label := model.DisplayName
@@ -299,16 +301,63 @@ func normalizeAntigravityQuotaRows(result AntigravityResult) []QuotaRow {
 			label = key
 		}
 		row := QuotaRow{Key: "model." + key, Label: label, Scope: "model", Metric: key}
+		// 每个模型都归入对应池的模型集合，池级窗口 cost 需要覆盖池内所有模型用量。
+		pool := ClassifyAntigravityPool(key)
+		acc := pools[pool]
+		if acc == nil {
+			acc = &antigravityPoolAccumulator{}
+			pools[pool] = acc
+		}
+		acc.models = append(acc.models, key)
 		if model.QuotaInfo != nil {
 			// Antigravity 模型限额按 5 小时刷新，只有存在 quota info 时才让该 row 进入窗口统计。
 			row.Window = &QuotaWindow{Seconds: intPtr(quotaWindowFiveHourSeconds)}
 			row.Remaining = floatPtr(model.QuotaInfo.Remaining)
 			row.RemainingFraction = floatPtr(model.QuotaInfo.RemainingFraction)
 			row.ResetAt = model.QuotaInfo.ResetTime
+			// 已用% = 1 - remainingFraction，取池内最高值作为该池瓶颈（最先触顶的模型）。
+			usedPercent := (1 - model.QuotaInfo.RemainingFraction) * 100
+			acc.observe(usedPercent, model.QuotaInfo.ResetTime)
 		}
 		rows = append(rows, row)
 	}
+	// 池级行按固定顺序追加，避免前端列表抖动。
+	for _, pool := range []AntigravityPool{AntigravityPoolGemini, AntigravityPoolThirdParty} {
+		acc := pools[pool]
+		if acc == nil || !acc.hasQuota {
+			// 池内没有任何模型给出 quota info 时不生成池级估算行。
+			continue
+		}
+		rows = append(rows, QuotaRow{
+			Key:         "pool." + string(pool),
+			Label:       antigravityPoolLabel(pool) + " 5h",
+			Scope:       "window",
+			Metric:      string(pool),
+			UsedPercent: floatPtr(acc.maxUsedPercent),
+			ResetAt:     acc.resetAt,
+			Window:      &QuotaWindow{Seconds: intPtr(quotaWindowFiveHourSeconds)},
+			ModelFilter: acc.models,
+		})
+	}
 	return rows
+}
+
+// antigravityPoolAccumulator collects per-pool 5h state while iterating models.
+type antigravityPoolAccumulator struct {
+	models         []string
+	hasQuota       bool
+	maxUsedPercent float64
+	resetAt        string
+}
+
+// observe records one model's used percentage and reset time, keeping the
+// bottleneck (highest used%) model's reset time as the pool reset reference.
+func (a *antigravityPoolAccumulator) observe(usedPercent float64, resetAt string) {
+	if !a.hasQuota || usedPercent > a.maxUsedPercent {
+		a.maxUsedPercent = usedPercent
+		a.resetAt = resetAt
+	}
+	a.hasQuota = true
 }
 
 func normalizeKimiQuotaRows(result KimiResult) []QuotaRow {
