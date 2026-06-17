@@ -12,6 +12,7 @@ func All() []any {
 		&UsageOverviewDailyStat{},
 		&UsageOverviewHealthStat{},
 		&UsageOverviewAggregationCheckpoint{},
+		&AntigravityWeeklyQuotaState{},
 		&AuthSession{},
 		&AppSetting{},
 	}

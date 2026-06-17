@@ -221,22 +221,34 @@ func TestNormalizeGeminiCLIQuotaRows(t *testing.T) {
 
 func TestNormalizeAntigravityQuotaRows(t *testing.T) {
 	rows := quota.NormalizeQuotaRows(quota.ProviderOutput{Provider: "antigravity", Result: quota.AntigravityResult{Quota: &quota.AntigravityQuotaPayload{Models: map[string]quota.AntigravityQuotaModel{
-		"pro":   {DisplayName: "Pro", QuotaInfo: &quota.AntigravityQuotaInfo{RemainingFraction: 0.4, Remaining: 12, ResetTime: "2026-05-09T12:00:00Z"}},
-		"flash": {QuotaInfo: &quota.AntigravityQuotaInfo{RemainingFraction: 0.9, Remaining: 32, ResetTime: "2026-05-10T12:00:00Z"}},
+		"gemini-3-pro-high":        {DisplayName: "Gemini 3 Pro", QuotaInfo: &quota.AntigravityQuotaInfo{RemainingFraction: 0.4, Remaining: 12, ResetTime: "2026-05-09T12:00:00Z"}},
+		"gemini-3-flash":           {QuotaInfo: &quota.AntigravityQuotaInfo{RemainingFraction: 0.9, Remaining: 32, ResetTime: "2026-05-10T12:00:00Z"}},
+		"claude-opus-4-6-thinking": {DisplayName: "Claude Opus", QuotaInfo: &quota.AntigravityQuotaInfo{RemainingFraction: 0.5, Remaining: 5, ResetTime: "2026-05-09T18:00:00Z"}},
 	}}}})
 
-	if len(rows) != 2 {
-		t.Fatalf("expected 2 quota rows, got %#v", rows)
+	// 3 model rows + 2 pool rows (gemini, third_party).
+	if len(rows) != 5 {
+		t.Fatalf("expected 5 quota rows, got %#v", rows)
 	}
-	pro := findQuotaRow(t, rows, "model.pro")
-	assertQuotaText(t, pro, "Pro", "model", "pro")
+	pro := findQuotaRow(t, rows, "model.gemini-3-pro-high")
+	assertQuotaText(t, pro, "Gemini 3 Pro", "model", "gemini-3-pro-high")
 	assertFloatField(t, pro.Remaining, 12, "pro remaining")
 	assertFloatField(t, pro.RemainingFraction, 0.4, "pro remainingFraction")
 	assertIntField(t, pro.Window.Seconds, 18000, "pro window seconds")
-	flash := findQuotaRow(t, rows, "model.flash")
-	assertQuotaText(t, flash, "flash", "model", "flash")
-	assertFloatField(t, flash.Remaining, 32, "flash remaining")
-	assertIntField(t, flash.Window.Seconds, 18000, "flash window seconds")
+
+	// Gemini pool: bottleneck is gemini-3-pro-high (used 60%), reset follows that model.
+	geminiPool := findQuotaRow(t, rows, "pool.gemini")
+	assertQuotaText(t, geminiPool, "Gemini 5h", "window", "gemini")
+	assertFloatFieldApprox(t, geminiPool.UsedPercent, 60, "gemini pool used percent")
+	assertIntField(t, geminiPool.Window.Seconds, 18000, "gemini pool window seconds")
+	if geminiPool.ResetAt != "2026-05-09T12:00:00Z" {
+		t.Fatalf("expected gemini pool reset from bottleneck model, got %q", geminiPool.ResetAt)
+	}
+
+	// Third-party pool: only claude model, used 50%.
+	thirdPartyPool := findQuotaRow(t, rows, "pool.third_party")
+	assertQuotaText(t, thirdPartyPool, "Claude/GPT 5h", "window", "third_party")
+	assertFloatFieldApprox(t, thirdPartyPool.UsedPercent, 50, "third party pool used percent")
 }
 
 func TestNormalizeKimiQuotaRows(t *testing.T) {
@@ -334,6 +346,20 @@ func assertFloatField(t *testing.T, value *float64, expected float64, label stri
 	t.Helper()
 	if value == nil || *value != expected {
 		t.Fatalf("unexpected %s: got %#v want %v", label, value, expected)
+	}
+}
+
+func assertFloatFieldApprox(t *testing.T, value *float64, expected float64, label string) {
+	t.Helper()
+	if value == nil {
+		t.Fatalf("unexpected %s: got nil want %v", label, expected)
+	}
+	diff := *value - expected
+	if diff < 0 {
+		diff = -diff
+	}
+	if diff > 1e-6 {
+		t.Fatalf("unexpected %s: got %v want %v", label, *value, expected)
 	}
 }
 

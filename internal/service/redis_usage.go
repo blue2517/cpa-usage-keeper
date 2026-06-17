@@ -16,22 +16,34 @@ import (
 
 // DecodeRedisUsageMessage 将 redis_inboxes.raw_message 原样解码为 usage_events 入库实体。
 func DecodeRedisUsageMessage(message string, fetchedAt time.Time) (entities.UsageEvent, json.RawMessage, error) {
-	event, raw, _, err := DecodeRedisUsageMessageWithHeaders(message, fetchedAt)
+	event, raw, _, _, err := DecodeRedisUsageMessageWithHeadersAndFail(message, fetchedAt)
 	return event, raw, err
 }
 
 // DecodeRedisUsageMessageWithHeaders 解码 usage event，并在 OAuth 响应携带 headers 时抽取 quota cache 更新快照。
 func DecodeRedisUsageMessageWithHeaders(message string, fetchedAt time.Time) (entities.UsageEvent, json.RawMessage, *quota.UsageHeaderSnapshot, error) {
+	event, raw, snapshot, _, err := DecodeRedisUsageMessageWithHeadersAndFail(message, fetchedAt)
+	return event, raw, snapshot, err
+}
+
+// DecodeRedisUsageMessageWithFail 在解码 usage_events 的同时返回网关上报的失败详情。
+// 失败详情仅用于 ingestion 期间的瞬时判定（如 Antigravity 周限触顶检测），不落库。
+func DecodeRedisUsageMessageWithFail(message string, fetchedAt time.Time) (entities.UsageEvent, queuedUsageFail, json.RawMessage, error) {
+	event, raw, _, fail, err := DecodeRedisUsageMessageWithHeadersAndFail(message, fetchedAt)
+	return event, fail, raw, err
+}
+
+func DecodeRedisUsageMessageWithHeadersAndFail(message string, fetchedAt time.Time) (entities.UsageEvent, json.RawMessage, *quota.UsageHeaderSnapshot, queuedUsageFail, error) {
 	raw := json.RawMessage(message)
 	var payload queuedUsageDetail
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return entities.UsageEvent{}, nil, nil, fmt.Errorf("decode redis usage message: %w", err)
+		return entities.UsageEvent{}, nil, nil, queuedUsageFail{}, fmt.Errorf("decode redis usage message: %w", err)
 	}
 	if strings.TrimSpace(payload.RequestID) == "" {
-		return entities.UsageEvent{}, raw, nil, fmt.Errorf("decode redis usage message: request_id is required")
+		return entities.UsageEvent{}, raw, nil, queuedUsageFail{}, fmt.Errorf("decode redis usage message: request_id is required")
 	}
 	event := payload.toUsageEvent(fetchedAt)
-	return event, raw, payload.toUsageHeaderSnapshot(event), nil
+	return event, raw, payload.toUsageHeaderSnapshot(event), payload.Fail, nil
 }
 
 // queuedUsageDetail 对应 CPA Redis 队列中的单条 usage JSON payload。
@@ -54,6 +66,15 @@ type queuedUsageDetail struct {
 	APIKey          string          `json:"api_key"`
 	RequestID       string          `json:"request_id"`
 	ResponseHeaders json.RawMessage `json:"response_headers"`
+	Fail            queuedUsageFail `json:"fail"`
+}
+
+// queuedUsageFail mirrors the gateway's per-request failure detail. It is only used
+// transiently during ingestion (e.g. Antigravity weekly-cap detection) and is not
+// persisted to usage_events.
+type queuedUsageFail struct {
+	StatusCode int    `json:"status_code"`
+	Body       string `json:"body"`
 }
 
 func normalizeRedisAuthType(value string) string {

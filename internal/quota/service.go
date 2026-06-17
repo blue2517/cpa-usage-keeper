@@ -227,9 +227,13 @@ func (s *Service) Check(ctx context.Context, request CheckRequest) (CheckRespons
 	if err != nil {
 		return CheckResponse{}, err
 	}
+	rows := NormalizeQuotaRows(providerOutput)
+	if providerOutput.Provider == "antigravity" {
+		rows = s.appendAntigravityWeeklyRows(ctx, authIndex, rows)
+	}
 	response := CheckResponse{
 		ID:    authIndex,
-		Quota: NormalizeQuotaRows(providerOutput),
+		Quota: rows,
 	}
 	// reset 次数跟随官方刷新结果写入同一份限额缓存，前端只展示缓存里的官方值。
 	if count, ok := rateLimitResetCreditsAvailableCount(providerOutput); ok {
