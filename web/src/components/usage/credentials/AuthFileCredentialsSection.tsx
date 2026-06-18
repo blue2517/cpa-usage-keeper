@@ -74,7 +74,7 @@ interface AuthFileCredentialsSectionProps {
 export function AuthFileCredentialsSection({ rows, total, page, totalPages, pageSize, activeOnly, sort, loading, quotaRefreshing, quotaRefreshError, quotaAutoRefreshEnabled, quotaInspectionStatus, quotaInspectionLoading, quotaInspectionStarting, quotaInspectionError, onPageChange, onPageSizeChange, onActiveOnlyChange, onSortChange, onRefreshQuota, onRefreshQuotaForAuthIndex, onRefreshInspectionStatus, onStartInspection, onAfterInvalidAccountAction }: AuthFileCredentialsSectionProps) {
   const { t } = useTranslation()
   const [inspectionOpen, setInspectionOpen] = useState(false)
-  const [quotaUsageMode, setQuotaUsageMode] = useState<QuotaUsageMode>('current')
+  const [quotaUsageMode, setQuotaUsageMode] = useState<QuotaUsageMode>('estimated')
   const canRefresh = rows.some((row) => !isRowRefreshing(row) && !row.identity.is_deleted) && !quotaRefreshing
   const inspectionTone = inspectionIndicatorTone(quotaInspectionStatus)
   const openInspection = () => {
