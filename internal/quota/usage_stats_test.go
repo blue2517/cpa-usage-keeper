@@ -342,6 +342,68 @@ func TestAttachWindowUsageStatsPreservesProviderZeroWindowUsage(t *testing.T) {
 	}
 }
 
+// TestAttachWindowUsageStatsBackfillsAntigravityPoolRowsViaPredicate 复现并锁定回归：
+// 池级 5h 行必须用 Gemini/第三方 LIKE 谓词回填，而不是 quota key 精确列表，
+// 否则当请求模型名（如带 effort 后缀的变体）不等于 quota key 时，池行会错误显示 0 token/cost。
+func TestAttachWindowUsageStatsBackfillsAntigravityPoolRowsViaPredicate(t *testing.T) {
+	db := openQuotaUsageStatsTestDB(t)
+	service := &Service{db: db}
+	windowSeconds := int64(5 * 60 * 60)
+	resetAt := time.Date(2026, 6, 2, 5, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 6, 2, 3, 0, 0, 0, time.UTC)
+	if _, err := repository.UpsertModelPriceSetting(db, dto.ModelPriceSettingInput{Model: "gemini-3-pro-high", PromptPricePer1M: 10}); err != nil {
+		t.Fatalf("UpsertModelPriceSetting gemini returned error: %v", err)
+	}
+	if _, err := repository.UpsertModelPriceSetting(db, dto.ModelPriceSettingInput{Model: "claude-opus-4-6", PromptPricePer1M: 30}); err != nil {
+		t.Fatalf("UpsertModelPriceSetting claude returned error: %v", err)
+	}
+	events := []entities.UsageEvent{
+		{AuthIndex: "auth-anti", Model: "gemini-3-pro-high", Timestamp: now.Add(-time.Hour), InputTokens: 1_000_000, TotalTokens: 1_000_000},
+		{AuthIndex: "auth-anti", Model: "claude-opus-4-6", Timestamp: now.Add(-time.Hour), InputTokens: 2_000_000, TotalTokens: 2_000_000},
+	}
+	if err := db.Create(&events).Error; err != nil {
+		t.Fatalf("seed usage events: %v", err)
+	}
+
+	geminiPool := true
+	thirdPartyPool := false
+	response := service.attachWindowUsageStats(context.Background(), "auth-anti", CheckResponse{ID: "auth-anti", Quota: []QuotaRow{
+		{
+			Key:                   "pool.gemini",
+			Label:                 "Gemini 5h",
+			Scope:                 "window",
+			Metric:                "gemini",
+			Window:                &QuotaWindow{Seconds: &windowSeconds},
+			ResetAt:               timeutil.FormatStorageTime(resetAt),
+			AntigravityGeminiPool: &geminiPool,
+		},
+		{
+			Key:                   "pool.third_party",
+			Label:                 "Claude/GPT 5h",
+			Scope:                 "window",
+			Metric:                "third_party",
+			Window:                &QuotaWindow{Seconds: &windowSeconds},
+			ResetAt:               timeutil.FormatStorageTime(resetAt),
+			AntigravityGeminiPool: &thirdPartyPool,
+		},
+	}}, now)
+
+	gemini := findQuotaUsageStatsRow(t, response.Quota, "pool.gemini")
+	if gemini.WindowUsageTokens == nil || *gemini.WindowUsageTokens != 1_000_000 {
+		t.Fatalf("expected gemini pool tokens 1000000, got %#v", gemini.WindowUsageTokens)
+	}
+	if gemini.WindowUsageCost == nil || *gemini.WindowUsageCost != 10 {
+		t.Fatalf("expected gemini pool cost 10, got %#v", gemini.WindowUsageCost)
+	}
+	thirdParty := findQuotaUsageStatsRow(t, response.Quota, "pool.third_party")
+	if thirdParty.WindowUsageTokens == nil || *thirdParty.WindowUsageTokens != 2_000_000 {
+		t.Fatalf("expected third-party pool tokens 2000000, got %#v", thirdParty.WindowUsageTokens)
+	}
+	if thirdParty.WindowUsageCost == nil || *thirdParty.WindowUsageCost != 60 {
+		t.Fatalf("expected third-party pool cost 60, got %#v", thirdParty.WindowUsageCost)
+	}
+}
+
 func openQuotaUsageStatsTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := repository.OpenDatabase(config.Config{SQLitePath: filepath.Join(t.TempDir(), "quota-usage-stats.db")})
