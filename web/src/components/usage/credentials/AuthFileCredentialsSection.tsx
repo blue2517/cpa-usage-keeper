@@ -1,264 +1,487 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react'
-import { useTranslation } from 'react-i18next'
-import { LoadingSpinner } from '@/components/ui/LoadingSpinner'
-import { Modal } from '@/components/ui/Modal'
-import { IconChartLine, IconGaugeReset, IconRefreshCw, IconSearch, IconSettings, IconShield, IconTrash2 } from '@/components/ui/icons'
-import quotaCostIcon from '@/assets/icons/quota-cost.svg'
-import quotaTokenIcon from '@/assets/icons/quota-token.svg'
-import styles from './CredentialSections.module.scss'
-import type { AuthFileCredentialRow, DisplayQuota, PlanTypeTone } from './credentialViewModels'
-import { deleteAuthFiles, fetchQuotaAutoRefreshSettings, setAuthFilesDisabled, updateQuotaAutoRefreshSettings, type UsageIdentityPageSort } from '@/lib/api'
-import type { QuotaAutoRefreshScheduleUnit, QuotaAutoRefreshSettings, UsageQuotaInspectionResult, UsageQuotaInspectionResultStatus, UsageQuotaInspectionStatusResponse } from '@/lib/types'
-import { CredentialAliasEditor, isCredentialAliasEditorDisabled } from './CredentialAliasEditor'
-import { CredentialHealthPanel } from './CredentialHealthPanel'
-import { CredentialProviderFilterIcon } from './CredentialProviderFilterBar'
-import { CredentialBadge, CredentialPriorityBadge, CredentialRowShell, CredentialSectionShell, CredentialTableHeader, CredentialsPagination, MetricPill, RequestMetric, TonePercent, cacheRateTone, capitalize, credentialToneClassName, formatCredentialNumber, successRateTone } from './CredentialSectionShell'
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { LoadingSpinner } from "@/components/ui/LoadingSpinner";
+import { Modal } from "@/components/ui/Modal";
+import {
+  IconChartLine,
+  IconGaugeReset,
+  IconRefreshCw,
+  IconSearch,
+  IconSettings,
+  IconShield,
+  IconTrash2,
+} from "@/components/ui/icons";
+import quotaCostIcon from "@/assets/icons/quota-cost.svg";
+import quotaTokenIcon from "@/assets/icons/quota-token.svg";
+import styles from "./CredentialSections.module.scss";
+import type {
+  AuthFileCredentialRow,
+  DisplayQuota,
+  PlanTypeTone,
+} from "./credentialViewModels";
+import {
+  deleteAuthFiles,
+  fetchQuotaAutoRefreshSettings,
+  setAuthFilesDisabled,
+  updateQuotaAutoRefreshSettings,
+  type UsageIdentityPageSort,
+} from "@/lib/api";
+import type {
+  QuotaAutoRefreshScheduleUnit,
+  QuotaAutoRefreshSettings,
+  UsageQuotaInspectionResult,
+  UsageQuotaInspectionResultStatus,
+  UsageQuotaInspectionStatusResponse,
+} from "@/lib/types";
+import {
+  CredentialAliasEditor,
+  isCredentialAliasEditorDisabled,
+} from "./CredentialAliasEditor";
+import { CredentialHealthPanel } from "./CredentialHealthPanel";
+import { CredentialProviderFilterIcon } from "./CredentialProviderFilterBar";
+import {
+  CredentialBadge,
+  CredentialPriorityBadge,
+  CredentialRowShell,
+  CredentialSectionShell,
+  CredentialTableHeader,
+  CredentialsPagination,
+  MetricPill,
+  RequestMetric,
+  TonePercent,
+  cacheRateTone,
+  capitalize,
+  credentialToneClassName,
+  formatCredentialNumber,
+  successRateTone,
+} from "./CredentialSectionShell";
 
-type Translate = (key: string, options?: Record<string, string>) => string
-type InspectionIndicatorTone = 'idle' | 'running' | 'completed'
-type InspectionResultStatusFilter = 'normal' | 'limit_reached' | 'unauthorized_401_402' | 'other_failed'
-type InspectionResultStatusFilterState = InspectionResultStatusFilter | null
-type InspectionStatTone = 'normal' | 'limitReached' | 'unauthorized' | 'failed' | 'unknown'
-type QuotaUsageMode = 'current' | 'estimated'
-type AuthFileDisplayMode = 'quota' | 'health'
-type InvalidInspectionAccountAction = 'disable' | 'delete'
+type Translate = (key: string, options?: Record<string, string>) => string;
+type InspectionIndicatorTone = "idle" | "running" | "completed";
+type InspectionResultStatusFilter =
+  "normal" | "limit_reached" | "unauthorized_401_402" | "other_failed";
+type InspectionResultStatusFilterState = InspectionResultStatusFilter | null;
+type InspectionStatTone =
+  "normal" | "limitReached" | "unauthorized" | "failed" | "unknown";
+type QuotaUsageMode = "current" | "estimated";
+type AuthFileDisplayMode = "quota" | "health";
+type InvalidInspectionAccountAction = "disable" | "delete";
 type QuotaErrorDisplay = {
-  code?: string
-  message: string
-  title: string
-}
+  code?: string;
+  message: string;
+  title: string;
+};
 type QuotaErrorDetails = {
-  code?: string
-  message?: string
-}
+  code?: string;
+  message?: string;
+};
 type QuotaResetPopoverPosition = {
-  top: number
-  right: number
-}
+  top: number;
+  right: number;
+};
 
-const QUOTA_ERROR_MESSAGE_MAX_LENGTH = 96
-const QUOTA_ERROR_PARSE_MAX_DEPTH = 10
-const AUTH_FILE_DISPLAY_MODE_STORAGE_KEY = 'cpa.credentials.authFiles.displayMode'
-export const INSPECTION_RESULT_PAGE_SIZE_OPTIONS = [10, 20, 50] as const
-const DEFAULT_INSPECTION_RESULT_PAGE_SIZE = INSPECTION_RESULT_PAGE_SIZE_OPTIONS[0]
-const INSPECTION_SELECTABLE_RESULT_STATUSES = new Set<InspectionResultStatusFilter>([
-  'normal',
-  'limit_reached',
-  'unauthorized_401_402',
-  'other_failed',
-])
-const INVALID_INSPECTION_ACCOUNT_STATUSES = new Set<UsageQuotaInspectionResultStatus>([
-  'unauthorized_401',
-  'payment_required_402',
-])
-const AUTO_REFRESH_SCHEDULE_LIMITS: Record<QuotaAutoRefreshScheduleUnit, number> = {
+const QUOTA_ERROR_MESSAGE_MAX_LENGTH = 96;
+const QUOTA_ERROR_PARSE_MAX_DEPTH = 10;
+const AUTH_FILE_DISPLAY_MODE_STORAGE_KEY =
+  "cpa.credentials.authFiles.displayMode";
+export const INSPECTION_RESULT_PAGE_SIZE_OPTIONS = [10, 20, 50] as const;
+const DEFAULT_INSPECTION_RESULT_PAGE_SIZE =
+  INSPECTION_RESULT_PAGE_SIZE_OPTIONS[0];
+const INSPECTION_SELECTABLE_RESULT_STATUSES =
+  new Set<InspectionResultStatusFilter>([
+    "normal",
+    "limit_reached",
+    "unauthorized_401_402",
+    "other_failed",
+  ]);
+const INVALID_INSPECTION_ACCOUNT_STATUSES =
+  new Set<UsageQuotaInspectionResultStatus>([
+    "unauthorized_401",
+    "payment_required_402",
+  ]);
+const AUTO_REFRESH_SCHEDULE_LIMITS: Record<
+  QuotaAutoRefreshScheduleUnit,
+  number
+> = {
   minute: 60,
   hour: 24,
   day: 30,
   week: 7,
-}
-const AUTO_REFRESH_SCHEDULE_UNITS: QuotaAutoRefreshScheduleUnit[] = ['minute', 'hour', 'day', 'week']
-const AUTO_REFRESH_WEEKDAYS = [1, 2, 3, 4, 5, 6, 7] as const
+};
+const AUTO_REFRESH_SCHEDULE_UNITS: QuotaAutoRefreshScheduleUnit[] = [
+  "minute",
+  "hour",
+  "day",
+  "week",
+];
+const AUTO_REFRESH_WEEKDAYS = [1, 2, 3, 4, 5, 6, 7] as const;
 
 interface AuthFileCredentialsSectionProps {
-  rows: AuthFileCredentialRow[]
-  total: number
-  page: number
-  totalPages: number
-  pageSize: number
-  activeOnly: boolean
-  sort: UsageIdentityPageSort
-  loading: boolean
-  quotaRefreshing: boolean
-  quotaRefreshError: string
-  quotaInspectionStatus: UsageQuotaInspectionStatusResponse | null
-  quotaInspectionLoading: boolean
-  quotaInspectionStarting: boolean
-  quotaInspectionError: string
-  onPageChange: (page: number) => void
-  onPageSizeChange: (pageSize: number) => void
-  onActiveOnlyChange: (activeOnly: boolean) => void
-  onSortChange: (sort: UsageIdentityPageSort) => void
-  onRefreshQuota: () => Promise<void>
-  onRefreshQuotaForAuthIndex: (authIndex: string) => Promise<void>
-  onResetQuotaForAuthIndex: (authIndex: string) => Promise<void>
-  aliasSavingId?: string
-  onSaveAlias?: (id: string, alias: string) => Promise<void>
-  onRefreshInspectionStatus: () => Promise<void>
-  onStartInspection: () => Promise<void>
-  onAfterInvalidAccountAction?: () => Promise<void>
+  rows: AuthFileCredentialRow[];
+  total: number;
+  page: number;
+  totalPages: number;
+  pageSize: number;
+  activeOnly: boolean;
+  sort: UsageIdentityPageSort;
+  loading: boolean;
+  quotaRefreshing: boolean;
+  quotaRefreshError: string;
+  quotaInspectionStatus: UsageQuotaInspectionStatusResponse | null;
+  quotaInspectionLoading: boolean;
+  quotaInspectionStarting: boolean;
+  quotaInspectionError: string;
+  onPageChange: (page: number) => void;
+  onPageSizeChange: (pageSize: number) => void;
+  onActiveOnlyChange: (activeOnly: boolean) => void;
+  onSortChange: (sort: UsageIdentityPageSort) => void;
+  onRefreshQuota: () => Promise<void>;
+  onRefreshQuotaForAuthIndex: (authIndex: string) => Promise<void>;
+  onResetQuotaForAuthIndex: (authIndex: string) => Promise<void>;
+  aliasSavingId?: string;
+  onSaveAlias?: (id: string, alias: string) => Promise<void>;
+  onRefreshInspectionStatus: () => Promise<void>;
+  onStartInspection: () => Promise<void>;
+  onAfterInvalidAccountAction?: () => Promise<void>;
 }
 
-export function AuthFileCredentialsSection({ rows, total, page, totalPages, pageSize, activeOnly, sort, loading, quotaRefreshing, quotaRefreshError, quotaInspectionStatus, quotaInspectionLoading, quotaInspectionStarting, quotaInspectionError, onPageChange, onPageSizeChange, onActiveOnlyChange, onSortChange, onRefreshQuota, onRefreshQuotaForAuthIndex, onResetQuotaForAuthIndex, aliasSavingId, onSaveAlias, onRefreshInspectionStatus, onStartInspection, onAfterInvalidAccountAction }: AuthFileCredentialsSectionProps) {
-  const { t } = useTranslation()
-  const [inspectionOpen, setInspectionOpen] = useState(false)
-  const [quotaUsageMode, setQuotaUsageMode] = useState<QuotaUsageMode>('current')
-  const [displayMode, setDisplayModeState] = useState<AuthFileDisplayMode>(() => readStoredAuthFileDisplayMode())
-  const showHealthMode = displayMode === 'health'
-  const canRefresh = rows.some((row) => !isRowRefreshing(row) && !row.identity.is_deleted) && !quotaRefreshing
-  const inspectionTone = inspectionIndicatorTone(quotaInspectionStatus)
+export function AuthFileCredentialsSection({
+  rows,
+  total,
+  page,
+  totalPages,
+  pageSize,
+  activeOnly,
+  sort,
+  loading,
+  quotaRefreshing,
+  quotaRefreshError,
+  quotaInspectionStatus,
+  quotaInspectionLoading,
+  quotaInspectionStarting,
+  quotaInspectionError,
+  onPageChange,
+  onPageSizeChange,
+  onActiveOnlyChange,
+  onSortChange,
+  onRefreshQuota,
+  onRefreshQuotaForAuthIndex,
+  onResetQuotaForAuthIndex,
+  aliasSavingId,
+  onSaveAlias,
+  onRefreshInspectionStatus,
+  onStartInspection,
+  onAfterInvalidAccountAction,
+}: AuthFileCredentialsSectionProps) {
+  const { t } = useTranslation();
+  const [inspectionOpen, setInspectionOpen] = useState(false);
+  const [quotaUsageMode, setQuotaUsageMode] =
+    useState<QuotaUsageMode>("estimated");
+  const [displayMode, setDisplayModeState] = useState<AuthFileDisplayMode>(() =>
+    readStoredAuthFileDisplayMode(),
+  );
+  const showHealthMode = displayMode === "health";
+  const canRefresh =
+    rows.some((row) => !isRowRefreshing(row) && !row.identity.is_deleted) &&
+    !quotaRefreshing;
+  const inspectionTone = inspectionIndicatorTone(quotaInspectionStatus);
   const openInspection = () => {
-    setInspectionOpen(true)
-    void onRefreshInspectionStatus()
-  }
+    setInspectionOpen(true);
+    void onRefreshInspectionStatus();
+  };
   const setDisplayMode = (mode: AuthFileDisplayMode) => {
-    setDisplayModeState(mode)
-    persistAuthFileDisplayMode(mode)
-  }
+    setDisplayModeState(mode);
+    persistAuthFileDisplayMode(mode);
+  };
 
   return (
     <>
       <CredentialSectionShell
-        title={t('usage_stats.credentials_auth_files_title')}
-        subtitle={t('usage_stats.credentials_auth_files_subtitle')}
-        countLabel={t('usage_stats.credentials_count', { count: total })}
-        titleExtra={(
+        title={t("usage_stats.credentials_auth_files_title")}
+        subtitle={t("usage_stats.credentials_auth_files_subtitle")}
+        countLabel={t("usage_stats.credentials_count", { count: total })}
+        titleExtra={
           <div className={styles.credentialAuthFileTitleControls}>
             <label className={styles.credentialActiveOnlySwitch}>
-              <span className={styles.credentialActiveOnlyLabel}>{t('usage_stats.credentials_auth_files_active_only')}</span>
-              <input type="checkbox" checked={activeOnly} onChange={(event) => onActiveOnlyChange(event.target.checked)} />
-              <span className={styles.credentialActiveOnlyTrack} aria-hidden="true">
+              <span className={styles.credentialActiveOnlyLabel}>
+                {t("usage_stats.credentials_auth_files_active_only")}
+              </span>
+              <input
+                type="checkbox"
+                checked={activeOnly}
+                onChange={(event) => onActiveOnlyChange(event.target.checked)}
+              />
+              <span
+                className={styles.credentialActiveOnlyTrack}
+                aria-hidden="true"
+              >
                 <span className={styles.credentialActiveOnlyThumb} />
               </span>
             </label>
-            <AuthFileDisplayModeSwitch mode={displayMode} onChange={setDisplayMode} />
+            <AuthFileDisplayModeSwitch
+              mode={displayMode}
+              onChange={setDisplayMode}
+            />
           </div>
-        )}
-        actions={(
+        }
+        actions={
           <div className={styles.credentialSectionActionButtons}>
-            <div className={`${styles.credentialRefreshSwitcher} ${styles.credentialInspectionSwitcher}`.trim()}>
+            <div
+              className={`${styles.credentialRefreshSwitcher} ${styles.credentialInspectionSwitcher}`.trim()}
+            >
               <button
                 type="button"
                 className={`${styles.credentialRefreshButton} ${styles.credentialRefreshButtonActive} ${styles.credentialInspectionButton}`.trim()}
                 onClick={openInspection}
-                aria-pressed={inspectionTone !== 'idle'}
+                aria-pressed={inspectionTone !== "idle"}
               >
                 <span className={styles.credentialRefreshButtonInner}>
                   <IconSearch size={12} />
-                  <span>{t('usage_stats.credentials_inspection_open')}</span>
-                  {inspectionTone !== 'idle' && <span className={`${styles.credentialInspectionDot} ${styles[`credentialInspectionDot${capitalize(inspectionTone)}`]}`.trim()} aria-hidden="true" />}
+                  <span>{t("usage_stats.credentials_inspection_open")}</span>
+                  {inspectionTone !== "idle" && (
+                    <span
+                      className={`${styles.credentialInspectionDot} ${styles[`credentialInspectionDot${capitalize(inspectionTone)}`]}`.trim()}
+                      aria-hidden="true"
+                    />
+                  )}
                 </span>
               </button>
             </div>
             <div className={styles.credentialRefreshSwitcher}>
               <button
                 type="button"
-                className={`${styles.credentialRefreshButton} ${styles.credentialRefreshButtonActive} ${quotaRefreshing ? styles.credentialRefreshButtonLoading : ''}`.trim()}
+                className={`${styles.credentialRefreshButton} ${styles.credentialRefreshButtonActive} ${quotaRefreshing ? styles.credentialRefreshButtonLoading : ""}`.trim()}
                 onClick={() => void onRefreshQuota()}
                 disabled={!canRefresh}
                 aria-busy={quotaRefreshing}
               >
                 <span className={styles.credentialRefreshButtonInner}>
-                  {quotaRefreshing ? <LoadingSpinner size={12} className={styles.credentialRefreshSpinner} /> : <IconRefreshCw size={12} />}
-                  <span>{quotaRefreshing ? t('usage_stats.credentials_quota_refreshing') : t('usage_stats.credentials_quota_refresh_current_page')}</span>
+                  {quotaRefreshing ? (
+                    <LoadingSpinner
+                      size={12}
+                      className={styles.credentialRefreshSpinner}
+                    />
+                  ) : (
+                    <IconRefreshCw size={12} />
+                  )}
+                  <span>
+                    {quotaRefreshing
+                      ? t("usage_stats.credentials_quota_refreshing")
+                      : t("usage_stats.credentials_quota_refresh_current_page")}
+                  </span>
                 </span>
               </button>
             </div>
           </div>
-        )}
+        }
       >
-      {/* 批量刷新失败显示在区块顶部，单行任务失败显示在对应限额位置。 */}
-      {quotaRefreshError && <div className={styles.credentialInlineError}>{quotaRefreshError}</div>}
-      {loading && rows.length === 0 && <div className={styles.credentialEmptyState}>{t('common.loading')}</div>}
-      {!loading && rows.length === 0 && <div className={styles.credentialEmptyState}>{t('usage_stats.credentials_auth_files_empty')}</div>}
-      {rows.length > 0 && (
-        <CredentialTableHeader
-          rowClassName={styles.authFileCredentialRow}
-          nameLabel={t('usage_stats.credentials_column_name')}
-          totalRequestsLabel={t('usage_stats.total_requests')}
-          successRateLabel={t('usage_stats.success_rate')}
-          totalTokensLabel={t('usage_stats.total_tokens')}
-          cacheRateLabel={t('usage_stats.cache_rate')}
-          sideLabel={showHealthMode ? t('usage_stats.credentials_column_health') : t('usage_stats.credentials_column_quota')}
-        />
-      )}
-      {rows.map((row) => {
-        const rowRefreshing = isRowRefreshing(row)
-        const resetCredits = row.quotaResetCreditsAvailableCount ?? 0
-        const canResetQuota = resetCredits > 0 && !row.identity.is_deleted && !rowRefreshing && !row.quotaResetting
-        return (
-          <CredentialRowShell
-            key={row.identity.id || row.identity.identity}
-            title={onSaveAlias ? (
-              <CredentialAliasEditor
-                identityId={row.identity.id}
-                displayName={row.displayName}
-                alias={row.identity.alias}
-                saving={aliasSavingId === row.identity.id}
-                disabled={isCredentialAliasEditorDisabled(row.identity.id, row.identity.is_deleted, aliasSavingId)}
-                onSaveAlias={onSaveAlias}
-              />
-            ) : row.displayName}
-            subtitle={(
-              <span className={styles.credentialIdentityBadges}>
-                <CredentialBadge>{row.typeLabel}</CredentialBadge>
-                {row.planTypeLabel && <CredentialPlanBadge tone={row.planTypeTone}>{row.planTypeLabel}</CredentialPlanBadge>}
-                {row.remainingDaysLabel && <span className={styles.credentialRemainingDaysBadge}>{row.remainingDaysLabel}</span>}
-                {row.priorityLabel && <CredentialPriorityBadge>{row.priorityLabel}</CredentialPriorityBadge>}
-              </span>
-            )}
-            badges={null}
-            metrics={(
-              <>
-                <MetricPill value={<RequestMetric total={row.totalRequests} success={row.successCount} failure={row.failureCount} />} />
-                <MetricPill value={<TonePercent value={row.successRate} tone={successRateTone(row.successRate)} />} />
-                <MetricPill value={formatCredentialNumber(row.totalTokens)} />
-                <MetricPill value={<TonePercent value={row.cacheRate} tone={cacheRateTone(row.cacheRate)} />} />
-              </>
-            )}
+        {/* 批量刷新失败显示在区块顶部，单行任务失败显示在对应限额位置。 */}
+        {quotaRefreshError && (
+          <div className={styles.credentialInlineError}>
+            {quotaRefreshError}
+          </div>
+        )}
+        {loading && rows.length === 0 && (
+          <div className={styles.credentialEmptyState}>
+            {t("common.loading")}
+          </div>
+        )}
+        {!loading && rows.length === 0 && (
+          <div className={styles.credentialEmptyState}>
+            {t("usage_stats.credentials_auth_files_empty")}
+          </div>
+        )}
+        {rows.length > 0 && (
+          <CredentialTableHeader
             rowClassName={styles.authFileCredentialRow}
-            side={showHealthMode ? (
-              <CredentialHealthPanel displayName={row.displayName} health={row.credentialHealth} lastUsedAt={row.identity.last_used_at} statsUpdatedAt={row.identity.stats_updated_at} />
-            ) : (
-              <div className={styles.credentialQuotaSideWithAction}>
-                <AuthFileQuotaPanel row={row} quotaUsageMode={quotaUsageMode} />
-                <div className={styles.credentialQuotaActionStack}>
-                  {/* reset 按钮只在官方缓存给出可用次数时展示；refresh 始终保留在右侧列居中位置。 */}
-                  {resetCredits > 0 && (
-                    <QuotaResetAction
-                      resetCredits={resetCredits}
-                      disabled={!canResetQuota}
-                      loading={row.quotaResetting === true}
-                      onConfirm={() => onResetQuotaForAuthIndex(row.identity.identity)}
-                    />
-                  )}
-                  <button
-                    type="button"
-                    className={`${styles.credentialRowRefreshButton} ${rowRefreshing ? styles.credentialRowRefreshButtonLoading : ''}`.trim()}
-                    onClick={() => void onRefreshQuotaForAuthIndex(row.identity.identity)}
-                    disabled={row.identity.is_deleted || rowRefreshing}
-                    aria-label={t('usage_stats.credentials_refresh_single', { name: row.displayName })}
-                    aria-busy={rowRefreshing}
-                  >
-                    {rowRefreshing ? <LoadingSpinner size={13} /> : <IconRefreshCw size={13} />}
-                  </button>
-                </div>
-              </div>
-            )}
+            nameLabel={t("usage_stats.credentials_column_name")}
+            totalRequestsLabel={t("usage_stats.total_requests")}
+            successRateLabel={t("usage_stats.success_rate")}
+            totalTokensLabel={t("usage_stats.total_tokens")}
+            cacheRateLabel={t("usage_stats.cache_rate")}
+            sideLabel={
+              showHealthMode
+                ? t("usage_stats.credentials_column_health")
+                : t("usage_stats.credentials_column_quota")
+            }
           />
-        )
-      })}
-      <CredentialsPagination
-        leadingControls={showHealthMode ? undefined : <QuotaUsageModeSwitch label={t('usage_stats.credentials_quota_usage_mode_label')} mode={quotaUsageMode} onChange={setQuotaUsageMode} />}
-        page={page}
-        total={total}
-        totalPages={totalPages}
-        pageSize={pageSize}
-        sortValue={sort}
-        sortLabel={t('usage_stats.credentials_sort_label')}
-        sortOptions={[
-          { value: 'priority', label: t('usage_stats.credentials_sort_priority') },
-          { value: 'total_requests', label: t('usage_stats.credentials_sort_total_requests') },
-          { value: 'total_tokens', label: t('usage_stats.credentials_sort_total_tokens') },
-          { value: 'last_used_at', label: t('usage_stats.credentials_sort_last_used') },
-        ]}
-        previousLabel={t('usage_stats.previous_page')}
-        nextLabel={t('usage_stats.next_page')}
-        rowsPerPageLabel={t('usage_stats.rows_per_page')}
-        onPageChange={onPageChange}
-        onPageSizeChange={onPageSizeChange}
-        onSortChange={(nextSort) => onSortChange(nextSort as UsageIdentityPageSort)}
-      />
+        )}
+        {rows.map((row) => {
+          const rowRefreshing = isRowRefreshing(row);
+          const resetCredits = row.quotaResetCreditsAvailableCount ?? 0;
+          const canResetQuota =
+            resetCredits > 0 &&
+            !row.identity.is_deleted &&
+            !rowRefreshing &&
+            !row.quotaResetting;
+          return (
+            <CredentialRowShell
+              key={row.identity.id || row.identity.identity}
+              title={
+                onSaveAlias ? (
+                  <CredentialAliasEditor
+                    identityId={row.identity.id}
+                    displayName={row.displayName}
+                    alias={row.identity.alias}
+                    saving={aliasSavingId === row.identity.id}
+                    disabled={isCredentialAliasEditorDisabled(
+                      row.identity.id,
+                      row.identity.is_deleted,
+                      aliasSavingId,
+                    )}
+                    onSaveAlias={onSaveAlias}
+                  />
+                ) : (
+                  row.displayName
+                )
+              }
+              subtitle={
+                <span className={styles.credentialIdentityBadges}>
+                  <CredentialBadge>{row.typeLabel}</CredentialBadge>
+                  {row.planTypeLabel && (
+                    <CredentialPlanBadge tone={row.planTypeTone}>
+                      {row.planTypeLabel}
+                    </CredentialPlanBadge>
+                  )}
+                  {row.remainingDaysLabel && (
+                    <span className={styles.credentialRemainingDaysBadge}>
+                      {row.remainingDaysLabel}
+                    </span>
+                  )}
+                  {row.priorityLabel && (
+                    <CredentialPriorityBadge>
+                      {row.priorityLabel}
+                    </CredentialPriorityBadge>
+                  )}
+                </span>
+              }
+              badges={null}
+              metrics={
+                <>
+                  <MetricPill
+                    value={
+                      <RequestMetric
+                        total={row.totalRequests}
+                        success={row.successCount}
+                        failure={row.failureCount}
+                      />
+                    }
+                  />
+                  <MetricPill
+                    value={
+                      <TonePercent
+                        value={row.successRate}
+                        tone={successRateTone(row.successRate)}
+                      />
+                    }
+                  />
+                  <MetricPill value={formatCredentialNumber(row.totalTokens)} />
+                  <MetricPill
+                    value={
+                      <TonePercent
+                        value={row.cacheRate}
+                        tone={cacheRateTone(row.cacheRate)}
+                      />
+                    }
+                  />
+                </>
+              }
+              rowClassName={styles.authFileCredentialRow}
+              side={
+                showHealthMode ? (
+                  <CredentialHealthPanel
+                    displayName={row.displayName}
+                    health={row.credentialHealth}
+                    lastUsedAt={row.identity.last_used_at}
+                    statsUpdatedAt={row.identity.stats_updated_at}
+                  />
+                ) : (
+                  <div className={styles.credentialQuotaSideWithAction}>
+                    <AuthFileQuotaPanel
+                      row={row}
+                      quotaUsageMode={quotaUsageMode}
+                    />
+                    <div className={styles.credentialQuotaActionStack}>
+                      {/* reset 按钮只在官方缓存给出可用次数时展示；refresh 始终保留在右侧列居中位置。 */}
+                      {resetCredits > 0 && (
+                        <QuotaResetAction
+                          resetCredits={resetCredits}
+                          disabled={!canResetQuota}
+                          loading={row.quotaResetting === true}
+                          onConfirm={() =>
+                            onResetQuotaForAuthIndex(row.identity.identity)
+                          }
+                        />
+                      )}
+                      <button
+                        type="button"
+                        className={`${styles.credentialRowRefreshButton} ${rowRefreshing ? styles.credentialRowRefreshButtonLoading : ""}`.trim()}
+                        onClick={() =>
+                          void onRefreshQuotaForAuthIndex(row.identity.identity)
+                        }
+                        disabled={row.identity.is_deleted || rowRefreshing}
+                        aria-label={t(
+                          "usage_stats.credentials_refresh_single",
+                          { name: row.displayName },
+                        )}
+                        aria-busy={rowRefreshing}
+                      >
+                        {rowRefreshing ? (
+                          <LoadingSpinner size={13} />
+                        ) : (
+                          <IconRefreshCw size={13} />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                )
+              }
+            />
+          );
+        })}
+        <CredentialsPagination
+          leadingControls={
+            showHealthMode ? undefined : (
+              <QuotaUsageModeSwitch
+                label={t("usage_stats.credentials_quota_usage_mode_label")}
+                mode={quotaUsageMode}
+                onChange={setQuotaUsageMode}
+              />
+            )
+          }
+          page={page}
+          total={total}
+          totalPages={totalPages}
+          pageSize={pageSize}
+          sortValue={sort}
+          sortLabel={t("usage_stats.credentials_sort_label")}
+          sortOptions={[
+            {
+              value: "priority",
+              label: t("usage_stats.credentials_sort_priority"),
+            },
+            {
+              value: "total_requests",
+              label: t("usage_stats.credentials_sort_total_requests"),
+            },
+            {
+              value: "total_tokens",
+              label: t("usage_stats.credentials_sort_total_tokens"),
+            },
+            {
+              value: "last_used_at",
+              label: t("usage_stats.credentials_sort_last_used"),
+            },
+          ]}
+          previousLabel={t("usage_stats.previous_page")}
+          nextLabel={t("usage_stats.next_page")}
+          rowsPerPageLabel={t("usage_stats.rows_per_page")}
+          onPageChange={onPageChange}
+          onPageSizeChange={onPageSizeChange}
+          onSortChange={(nextSort) =>
+            onSortChange(nextSort as UsageIdentityPageSort)
+          }
+        />
       </CredentialSectionShell>
       <QuotaInspectionModal
         open={inspectionOpen}
@@ -272,9 +495,8 @@ export function AuthFileCredentialsSection({ rows, total, page, totalPages, page
         onAfterInvalidAccountAction={onAfterInvalidAccountAction}
       />
     </>
-  )
+  );
 }
-
 
 function QuotaResetAction({
   resetCredits,
@@ -282,98 +504,101 @@ function QuotaResetAction({
   loading,
   onConfirm,
 }: {
-  resetCredits: number
-  disabled: boolean
-  loading: boolean
-  onConfirm: () => Promise<void>
+  resetCredits: number;
+  disabled: boolean;
+  loading: boolean;
+  onConfirm: () => Promise<void>;
 }) {
-  const { t } = useTranslation()
-  const [open, setOpen] = useState(false)
-  const [popoverPosition, setPopoverPosition] = useState<QuotaResetPopoverPosition | null>(null)
-  const tooltipId = useId()
-  const actionRef = useRef<HTMLDivElement | null>(null)
-  const buttonRef = useRef<HTMLButtonElement | null>(null)
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const [popoverPosition, setPopoverPosition] =
+    useState<QuotaResetPopoverPosition | null>(null);
+  const tooltipId = useId();
+  const actionRef = useRef<HTMLDivElement | null>(null);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
 
   const updatePopoverPosition = useCallback(() => {
-    if (typeof window === 'undefined') {
-      return
+    if (typeof window === "undefined") {
+      return;
     }
-    const button = buttonRef.current
+    const button = buttonRef.current;
     if (!button) {
-      return
+      return;
     }
-    const rect = button.getBoundingClientRect()
+    const rect = button.getBoundingClientRect();
     // popover 使用 fixed，避免被卡片 overflow 裁切，同时跟随右侧按钮重新定位。
     setPopoverPosition({
       top: Math.round(rect.bottom + 8),
       right: Math.max(12, Math.round(window.innerWidth - rect.right)),
-    })
-  }, [])
+    });
+  }, []);
 
   useEffect(() => {
     if (!open) {
-      return
+      return;
     }
-    updatePopoverPosition()
-    const refreshPopoverPosition = () => updatePopoverPosition()
-    window.addEventListener('resize', refreshPopoverPosition)
-    window.addEventListener('scroll', refreshPopoverPosition, true)
+    updatePopoverPosition();
+    const refreshPopoverPosition = () => updatePopoverPosition();
+    window.addEventListener("resize", refreshPopoverPosition);
+    window.addEventListener("scroll", refreshPopoverPosition, true);
     return () => {
-      window.removeEventListener('resize', refreshPopoverPosition)
-      window.removeEventListener('scroll', refreshPopoverPosition, true)
-    }
-  }, [open, updatePopoverPosition])
+      window.removeEventListener("resize", refreshPopoverPosition);
+      window.removeEventListener("scroll", refreshPopoverPosition, true);
+    };
+  }, [open, updatePopoverPosition]);
 
   useEffect(() => {
-    if (!open || typeof document === 'undefined') {
-      return
+    if (!open || typeof document === "undefined") {
+      return;
     }
     const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target
+      const target = event.target;
       if (!(target instanceof Node)) {
-        return
+        return;
       }
       if (actionRef.current?.contains(target)) {
-        return
+        return;
       }
-      setOpen(false)
-    }
+      setOpen(false);
+    };
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setOpen(false)
+      if (event.key === "Escape") {
+        setOpen(false);
       }
-    }
-    document.addEventListener('pointerdown', handlePointerDown)
-    document.addEventListener('keydown', handleKeyDown)
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
     return () => {
-      document.removeEventListener('pointerdown', handlePointerDown)
-      document.removeEventListener('keydown', handleKeyDown)
-    }
-  }, [open])
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open]);
 
   const handleConfirm = async () => {
-    await onConfirm()
-    setOpen(false)
-  }
+    await onConfirm();
+    setOpen(false);
+  };
 
   const handleToggleOpen = () => {
     if (open) {
-      setOpen(false)
-      return
+      setOpen(false);
+      return;
     }
-    updatePopoverPosition()
-    setOpen(true)
-  }
+    updatePopoverPosition();
+    setOpen(true);
+  };
 
   return (
     <div ref={actionRef} className={styles.credentialQuotaResetAction}>
       <button
         ref={buttonRef}
         type="button"
-        className={`${styles.credentialRowResetButton} ${loading ? styles.credentialRowRefreshButtonLoading : ''}`.trim()}
+        className={`${styles.credentialRowResetButton} ${loading ? styles.credentialRowRefreshButtonLoading : ""}`.trim()}
         onClick={handleToggleOpen}
         disabled={disabled}
-        aria-label={t('usage_stats.credentials_quota_reset_button', { count: String(resetCredits) })}
+        aria-label={t("usage_stats.credentials_quota_reset_button", {
+          count: String(resetCredits),
+        })}
         aria-describedby={open ? undefined : tooltipId}
         aria-busy={loading}
         aria-expanded={open}
@@ -382,137 +607,226 @@ function QuotaResetAction({
         {loading ? <LoadingSpinner size={13} /> : <IconGaugeReset size={13} />}
       </button>
       {!open && (
-        <span id={tooltipId} className={styles.credentialQuotaResetTooltip} role="tooltip">
-          <span className={styles.credentialQuotaResetCount}>{resetCredits}</span>
-          <span>{t('usage_stats.credentials_quota_reset_tooltip_suffix')}</span>
+        <span
+          id={tooltipId}
+          className={styles.credentialQuotaResetTooltip}
+          role="tooltip"
+        >
+          <span className={styles.credentialQuotaResetCount}>
+            {resetCredits}
+          </span>
+          <span>{t("usage_stats.credentials_quota_reset_tooltip_suffix")}</span>
         </span>
       )}
       {open && (
         <div
           className={styles.credentialQuotaResetPopover}
           role="dialog"
-          aria-label={t('usage_stats.credentials_quota_reset_title')}
-          style={popoverPosition ? { top: popoverPosition.top, right: popoverPosition.right } : undefined}
+          aria-label={t("usage_stats.credentials_quota_reset_title")}
+          style={
+            popoverPosition
+              ? { top: popoverPosition.top, right: popoverPosition.right }
+              : undefined
+          }
         >
-          <p className={styles.credentialQuotaResetTitle}>{t('usage_stats.credentials_quota_reset_title')}</p>
+          <p className={styles.credentialQuotaResetTitle}>
+            {t("usage_stats.credentials_quota_reset_title")}
+          </p>
           <p className={styles.credentialQuotaResetMessage}>
             <span className={styles.credentialQuotaResetCountLine}>
-              <span className={styles.credentialQuotaResetCount}>{resetCredits}</span>
-              <span>{t('usage_stats.credentials_quota_reset_message_suffix')}</span>
+              <span className={styles.credentialQuotaResetCount}>
+                {resetCredits}
+              </span>
+              <span>
+                {t("usage_stats.credentials_quota_reset_message_suffix")}
+              </span>
             </span>
-            <span>{t('usage_stats.credentials_quota_reset_message_prompt')}</span>
+            <span>
+              {t("usage_stats.credentials_quota_reset_message_prompt")}
+            </span>
           </p>
           <div className={styles.credentialQuotaResetActions}>
-            <button type="button" className={styles.credentialQuotaResetCancelButton} onClick={() => setOpen(false)} disabled={loading}>
-              {t('common.cancel')}
+            <button
+              type="button"
+              className={styles.credentialQuotaResetCancelButton}
+              onClick={() => setOpen(false)}
+              disabled={loading}
+            >
+              {t("common.cancel")}
             </button>
-            <button type="button" className={styles.credentialQuotaResetConfirmButton} onClick={() => void handleConfirm()} disabled={loading} aria-busy={loading}>
-              {loading ? <LoadingSpinner size={12} /> : t('usage_stats.credentials_quota_reset_confirm')}
+            <button
+              type="button"
+              className={styles.credentialQuotaResetConfirmButton}
+              onClick={() => void handleConfirm()}
+              disabled={loading}
+              aria-busy={loading}
+            >
+              {loading ? (
+                <LoadingSpinner size={12} />
+              ) : (
+                t("usage_stats.credentials_quota_reset_confirm")
+              )}
             </button>
           </div>
         </div>
       )}
     </div>
-  )
+  );
 }
 
 function isRowRefreshing(row: AuthFileCredentialRow): boolean {
-  return row.refreshStatus === 'queued' || row.refreshStatus === 'running'
+  return row.refreshStatus === "queued" || row.refreshStatus === "running";
 }
 
-export function inspectionProgressTotal(status: Pick<UsageQuotaInspectionStatusResponse, 'total' | 'unknown'> | null): number {
+export function inspectionProgressTotal(
+  status: Pick<UsageQuotaInspectionStatusResponse, "total" | "unknown"> | null,
+): number {
   // 弹框进度条展示的是“巡检刷新任务进度”，不是 Auth Files 总账号覆盖率。
   if (!status) {
-    return 0
+    return 0;
   }
   // unknown 代表未参与刷新或没有可解析缓存的账号，不参与进度百分比分母。
-  return Math.max(0, status.total - status.unknown)
+  return Math.max(0, status.total - status.unknown);
 }
 
-export function formatInspectionProgressPercent(status: Pick<UsageQuotaInspectionStatusResponse, 'total' | 'cached' | 'unknown'> | null): number {
+export function formatInspectionProgressPercent(
+  status: Pick<
+    UsageQuotaInspectionStatusResponse,
+    "total" | "cached" | "unknown"
+  > | null,
+): number {
   // 初始加载或接口失败时没有状态，进度保持 0，避免前端自行 fallback total。
   if (!status) {
-    return 0
+    return 0;
   }
   // 分母统一走 inspectionProgressTotal，保证显示文本和进度条使用同一口径。
-  const progressTotal = inspectionProgressTotal(status)
+  const progressTotal = inspectionProgressTotal(status);
   if (progressTotal <= 0) {
-    return 0
+    return 0;
   }
   // cached 可能因为缓存恢复或并发刷新短暂超过分母，最终百分比要钳制在 0-100。
-  return Math.max(0, Math.min(100, Math.round((status.cached / progressTotal) * 100)))
+  return Math.max(
+    0,
+    Math.min(100, Math.round((status.cached / progressTotal) * 100)),
+  );
 }
 
-export function isInspectionStartDisabled({ starting, total, running }: { starting: boolean; total: number; running: boolean }): boolean {
+export function isInspectionStartDisabled({
+  starting,
+  total,
+  running,
+}: {
+  starting: boolean;
+  total: number;
+  running: boolean;
+}): boolean {
   // running 只代表显式巡检轮次；定时刷新和手动刷新共用队列但不禁用手动巡检入口。
-  return starting || running || total <= 0
+  return starting || running || total <= 0;
 }
 
-export function inspectionIndicatorTone(status: Pick<UsageQuotaInspectionStatusResponse, 'running' | 'completed' | 'completed_at'> | null): InspectionIndicatorTone {
+export function inspectionIndicatorTone(
+  status: Pick<
+    UsageQuotaInspectionStatusResponse,
+    "running" | "completed" | "completed_at"
+  > | null,
+): InspectionIndicatorTone {
   // 黄色点只看显式巡检 running，不响应普通手动刷新/自动刷新。
   if (status?.running) {
-    return 'running'
+    return "running";
   }
   // 绿色点必须有 completed_at；completed 没有时间时不展示完成态，避免共享缓存误点亮。
   if (status?.completed_at) {
-    return 'completed'
+    return "completed";
   }
-  return 'idle'
+  return "idle";
 }
 
-export function isSelectableInspectionStatusFilter(status: unknown): status is InspectionResultStatusFilter {
-  return typeof status === 'string' && INSPECTION_SELECTABLE_RESULT_STATUSES.has(status as InspectionResultStatusFilter)
+export function isSelectableInspectionStatusFilter(
+  status: unknown,
+): status is InspectionResultStatusFilter {
+  return (
+    typeof status === "string" &&
+    INSPECTION_SELECTABLE_RESULT_STATUSES.has(
+      status as InspectionResultStatusFilter,
+    )
+  );
 }
 
-export function nextInspectionResultStatusFilter(current: InspectionResultStatusFilterState, next: InspectionResultStatusFilter): InspectionResultStatusFilterState {
-  return current === next ? null : next
+export function nextInspectionResultStatusFilter(
+  current: InspectionResultStatusFilterState,
+  next: InspectionResultStatusFilter,
+): InspectionResultStatusFilterState {
+  return current === next ? null : next;
 }
 
-export function buildInspectionResultsPage(results: UsageQuotaInspectionResult[], statusFilter: InspectionResultStatusFilterState, page: number, pageSize: number): { results: UsageQuotaInspectionResult[]; total: number; totalPages: number; page: number; pageSize: number } {
-  const safePageSize = INSPECTION_RESULT_PAGE_SIZE_OPTIONS.includes(pageSize as (typeof INSPECTION_RESULT_PAGE_SIZE_OPTIONS)[number])
+export function buildInspectionResultsPage(
+  results: UsageQuotaInspectionResult[],
+  statusFilter: InspectionResultStatusFilterState,
+  page: number,
+  pageSize: number,
+): {
+  results: UsageQuotaInspectionResult[];
+  total: number;
+  totalPages: number;
+  page: number;
+  pageSize: number;
+} {
+  const safePageSize = INSPECTION_RESULT_PAGE_SIZE_OPTIONS.includes(
+    pageSize as (typeof INSPECTION_RESULT_PAGE_SIZE_OPTIONS)[number],
+  )
     ? pageSize
-    : DEFAULT_INSPECTION_RESULT_PAGE_SIZE
-  const filteredResults = statusFilter ? results.filter((result) => matchesInspectionResultStatusFilter(result.status, statusFilter)) : results
-  const total = filteredResults.length
-  const totalPages = Math.max(1, Math.ceil(total / safePageSize))
-  const safePage = Math.max(1, Math.min(Math.floor(page) || 1, totalPages))
-  const start = (safePage - 1) * safePageSize
+    : DEFAULT_INSPECTION_RESULT_PAGE_SIZE;
+  const filteredResults = statusFilter
+    ? results.filter((result) =>
+        matchesInspectionResultStatusFilter(result.status, statusFilter),
+      )
+    : results;
+  const total = filteredResults.length;
+  const totalPages = Math.max(1, Math.ceil(total / safePageSize));
+  const safePage = Math.max(1, Math.min(Math.floor(page) || 1, totalPages));
+  const start = (safePage - 1) * safePageSize;
   return {
     results: filteredResults.slice(start, start + safePageSize),
     total,
     totalPages,
     page: safePage,
     pageSize: safePageSize,
-  }
+  };
 }
 
-function matchesInspectionResultStatusFilter(status: UsageQuotaInspectionResultStatus, filter: InspectionResultStatusFilter): boolean {
+function matchesInspectionResultStatusFilter(
+  status: UsageQuotaInspectionResultStatus,
+  filter: InspectionResultStatusFilter,
+): boolean {
   // 摘要卡把 401/402 合并，但结果行仍保留原始状态，方便禁用/删除按行处理。
-  if (filter === 'unauthorized_401_402') {
-    return status === 'unauthorized_401' || status === 'payment_required_402'
+  if (filter === "unauthorized_401_402") {
+    return status === "unauthorized_401" || status === "payment_required_402";
   }
-  return status === filter
+  return status === filter;
 }
 
 type AutoRefreshSettingsFormSetters = {
-  setEnabled: (enabled: boolean) => void
-  setUnit: (unit: QuotaAutoRefreshScheduleUnit) => void
-  setValue: (value: string) => void
-}
+  setEnabled: (enabled: boolean) => void;
+  setUnit: (unit: QuotaAutoRefreshScheduleUnit) => void;
+  setValue: (value: string) => void;
+};
 
 type AutoRefreshSettingsBuildResult =
   | { settings: QuotaAutoRefreshSettings; errorKey?: never }
-  | { settings?: never; errorKey: string }
+  | { settings?: never; errorKey: string };
 
-function applyQuotaAutoRefreshSettingsForm(settings: QuotaAutoRefreshSettings, setters: AutoRefreshSettingsFormSetters) {
-  setters.setEnabled(settings.enabled)
+function applyQuotaAutoRefreshSettingsForm(
+  settings: QuotaAutoRefreshSettings,
+  setters: AutoRefreshSettingsFormSetters,
+) {
+  setters.setEnabled(settings.enabled);
   if (settings.schedule) {
-    setters.setUnit(settings.schedule.unit)
-    setters.setValue(String(settings.schedule.value))
-    return
+    setters.setUnit(settings.schedule.unit);
+    setters.setValue(String(settings.schedule.value));
+    return;
   }
-  setters.setUnit('minute')
-  setters.setValue('')
+  setters.setUnit("minute");
+  setters.setValue("");
 }
 
 export function buildQuotaAutoRefreshSettings({
@@ -520,21 +834,29 @@ export function buildQuotaAutoRefreshSettings({
   unit,
   value,
 }: {
-  enabled: boolean
-  unit: QuotaAutoRefreshScheduleUnit
-  value: string
+  enabled: boolean;
+  unit: QuotaAutoRefreshScheduleUnit;
+  value: string;
 }): AutoRefreshSettingsBuildResult {
   if (!enabled) {
-    return { settings: { enabled: false, schedule: null } }
+    return { settings: { enabled: false, schedule: null } };
   }
-  const trimmedValue = value.trim()
-  if (trimmedValue === '') {
-    return { errorKey: 'usage_stats.credentials_auto_refresh_validation_required' }
+  const trimmedValue = value.trim();
+  if (trimmedValue === "") {
+    return {
+      errorKey: "usage_stats.credentials_auto_refresh_validation_required",
+    };
   }
-  const numericValue = Number(trimmedValue)
-  const max = AUTO_REFRESH_SCHEDULE_LIMITS[unit]
-  if (!Number.isInteger(numericValue) || numericValue < 1 || numericValue > max) {
-    return { errorKey: 'usage_stats.credentials_auto_refresh_validation_range' }
+  const numericValue = Number(trimmedValue);
+  const max = AUTO_REFRESH_SCHEDULE_LIMITS[unit];
+  if (
+    !Number.isInteger(numericValue) ||
+    numericValue < 1 ||
+    numericValue > max
+  ) {
+    return {
+      errorKey: "usage_stats.credentials_auto_refresh_validation_range",
+    };
   }
   return {
     settings: {
@@ -544,7 +866,7 @@ export function buildQuotaAutoRefreshSettings({
         value: numericValue,
       },
     },
-  }
+  };
 }
 
 export function isAutoRefreshSettingsSaveDisabled({
@@ -552,11 +874,11 @@ export function isAutoRefreshSettingsSaveDisabled({
   saving,
   loaded,
 }: {
-  loading: boolean
-  saving: boolean
-  loaded: boolean
+  loading: boolean;
+  saving: boolean;
+  loaded: boolean;
 }): boolean {
-  return loading || saving || !loaded
+  return loading || saving || !loaded;
 }
 
 export function isAutoRefreshSettingsControlDisabled({
@@ -564,55 +886,68 @@ export function isAutoRefreshSettingsControlDisabled({
   saving,
   loaded,
 }: {
-  loading: boolean
-  saving: boolean
-  loaded: boolean
+  loading: boolean;
+  saving: boolean;
+  loaded: boolean;
 }): boolean {
-  return loading || saving || !loaded
+  return loading || saving || !loaded;
 }
 
-export function resolveQuotaAutoRefreshSettingsLoadFailure(nextError: unknown, fallbackMessage: string): { settings: QuotaAutoRefreshSettings; error: string; loaded: true } {
+export function resolveQuotaAutoRefreshSettingsLoadFailure(
+  nextError: unknown,
+  fallbackMessage: string,
+): { settings: QuotaAutoRefreshSettings; error: string; loaded: true } {
   return {
     settings: { enabled: false, schedule: null },
-    error: nextError instanceof Error && nextError.message ? nextError.message : fallbackMessage,
+    error:
+      nextError instanceof Error && nextError.message
+        ? nextError.message
+        : fallbackMessage,
     loaded: true,
-  }
+  };
 }
 
 export function isQuotaInspectionCloseDisabled({
-	invalidAccountActionOpen,
-	invalidAccountSubmitting,
+  invalidAccountActionOpen,
+  invalidAccountSubmitting,
 }: {
-	invalidAccountActionOpen: boolean
-	invalidAccountSubmitting: boolean
+  invalidAccountActionOpen: boolean;
+  invalidAccountSubmitting: boolean;
 }): boolean {
-	return invalidAccountActionOpen || invalidAccountSubmitting
+  return invalidAccountActionOpen || invalidAccountSubmitting;
 }
 
-export function buildInvalidInspectionAccountFileNames(results: UsageQuotaInspectionResult[]): string[] {
-  const seen = new Set<string>()
-  const names: string[] = []
+export function buildInvalidInspectionAccountFileNames(
+  results: UsageQuotaInspectionResult[],
+): string[] {
+  const seen = new Set<string>();
+  const names: string[] = [];
   for (const result of results) {
     if (!INVALID_INSPECTION_ACCOUNT_STATUSES.has(result.status)) {
-      continue
+      continue;
     }
-    const fileName = (result.file_name ?? '').trim()
+    const fileName = (result.file_name ?? "").trim();
     if (!fileName || seen.has(fileName)) {
-      continue
+      continue;
     }
-    seen.add(fileName)
-    names.push(fileName)
+    seen.add(fileName);
+    names.push(fileName);
   }
-  return names
+  return names;
 }
 
-export function selectAllInvalidInspectionAccountFileNames(fileNames: string[]): string[] {
-  return [...fileNames]
+export function selectAllInvalidInspectionAccountFileNames(
+  fileNames: string[],
+): string[] {
+  return [...fileNames];
 }
 
-export function invertInvalidInspectionAccountFileNames(fileNames: string[], selectedFileNames: string[]): string[] {
-  const selected = new Set(selectedFileNames)
-  return fileNames.filter((fileName) => !selected.has(fileName))
+export function invertInvalidInspectionAccountFileNames(
+  fileNames: string[],
+  selectedFileNames: string[],
+): string[] {
+  const selected = new Set(selectedFileNames);
+  return fileNames.filter((fileName) => !selected.has(fileName));
 }
 
 export function QuotaInspectionModal({
@@ -626,195 +961,238 @@ export function QuotaInspectionModal({
   onRefreshStatus,
   onAfterInvalidAccountAction,
 }: {
-  open: boolean
-  status: UsageQuotaInspectionStatusResponse | null
-  loading: boolean
-  starting: boolean
-  error: string
-  onClose: () => void
-  onStart: () => Promise<void>
-  onRefreshStatus: () => Promise<void>
-  onAfterInvalidAccountAction?: () => Promise<void>
+  open: boolean;
+  status: UsageQuotaInspectionStatusResponse | null;
+  loading: boolean;
+  starting: boolean;
+  error: string;
+  onClose: () => void;
+  onStart: () => Promise<void>;
+  onRefreshStatus: () => Promise<void>;
+  onAfterInvalidAccountAction?: () => Promise<void>;
 }) {
-  const { t } = useTranslation()
-  const [resultStatusFilter, setResultStatusFilter] = useState<InspectionResultStatusFilterState>(null)
-  const [resultPage, setResultPage] = useState(1)
-  const [resultPageSize, setResultPageSize] = useState<number>(DEFAULT_INSPECTION_RESULT_PAGE_SIZE)
-  const [invalidAccountAction, setInvalidAccountAction] = useState<InvalidInspectionAccountAction | null>(null)
-  const [selectedInvalidFileNames, setSelectedInvalidFileNames] = useState<string[]>([])
-  const [invalidAccountSubmitting, setInvalidAccountSubmitting] = useState(false)
-  const [invalidAccountError, setInvalidAccountError] = useState('')
-  const [settingsModalOpen, setSettingsModalOpen] = useState(false)
-  const [settingsLoading, setSettingsLoading] = useState(false)
-  const [settingsSaving, setSettingsSaving] = useState(false)
-  const [settingsLoaded, setSettingsLoaded] = useState(false)
-  const [settingsError, setSettingsError] = useState('')
-  const [settingsEnabled, setSettingsEnabled] = useState(false)
-  const [scheduleUnit, setScheduleUnit] = useState<QuotaAutoRefreshScheduleUnit>('minute')
-  const [scheduleValue, setScheduleValue] = useState('')
+  const { t } = useTranslation();
+  const [resultStatusFilter, setResultStatusFilter] =
+    useState<InspectionResultStatusFilterState>(null);
+  const [resultPage, setResultPage] = useState(1);
+  const [resultPageSize, setResultPageSize] = useState<number>(
+    DEFAULT_INSPECTION_RESULT_PAGE_SIZE,
+  );
+  const [invalidAccountAction, setInvalidAccountAction] =
+    useState<InvalidInspectionAccountAction | null>(null);
+  const [selectedInvalidFileNames, setSelectedInvalidFileNames] = useState<
+    string[]
+  >([]);
+  const [invalidAccountSubmitting, setInvalidAccountSubmitting] =
+    useState(false);
+  const [invalidAccountError, setInvalidAccountError] = useState("");
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const [settingsLoading, setSettingsLoading] = useState(false);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const [settingsError, setSettingsError] = useState("");
+  const [settingsEnabled, setSettingsEnabled] = useState(false);
+  const [scheduleUnit, setScheduleUnit] =
+    useState<QuotaAutoRefreshScheduleUnit>("minute");
+  const [scheduleValue, setScheduleValue] = useState("");
   // total 由后端 Auth Files 身份统计提供，不用页面分页总数替代。
-  const total = status?.total ?? 0
+  const total = status?.total ?? 0;
   // cached 是已经能解析出最近巡检结果的账号数。
-  const cached = status?.cached ?? 0
+  const cached = status?.cached ?? 0;
   // progressTotal 排除 unknown，使进度条只描述实际刷新任务完成度。
-  const progressTotal = inspectionProgressTotal(status)
-  const progress = formatInspectionProgressPercent(status)
+  const progressTotal = inspectionProgressTotal(status);
+  const progress = formatInspectionProgressPercent(status);
   // startDisabled 只依赖显式巡检状态和可巡检总数，不被定时刷新或普通行刷新状态牵连。
   const startDisabled = isInspectionStartDisabled({
     starting,
     total,
     running: status?.running ?? false,
-  })
-  const startLabel = (starting || status?.running)
-    ? t('usage_stats.credentials_inspection_running')
-    : t('usage_stats.credentials_inspection_start')
-  const results = status?.results ?? []
-  const invalidFileNames = buildInvalidInspectionAccountFileNames(results)
-  const resultPageData = buildInspectionResultsPage(results, resultStatusFilter, resultPage, resultPageSize)
-  const handleSelectResultStatus = (nextStatus: InspectionResultStatusFilter) => {
+  });
+  const startLabel =
+    starting || status?.running
+      ? t("usage_stats.credentials_inspection_running")
+      : t("usage_stats.credentials_inspection_start");
+  const results = status?.results ?? [];
+  const invalidFileNames = buildInvalidInspectionAccountFileNames(results);
+  const resultPageData = buildInspectionResultsPage(
+    results,
+    resultStatusFilter,
+    resultPage,
+    resultPageSize,
+  );
+  const handleSelectResultStatus = (
+    nextStatus: InspectionResultStatusFilter,
+  ) => {
     // 切换状态筛选时回到第一页，避免沿用上一个筛选的高页码导致空页。
-    setResultStatusFilter((current) => nextInspectionResultStatusFilter(current, nextStatus))
-    setResultPage(1)
-  }
+    setResultStatusFilter((current) =>
+      nextInspectionResultStatusFilter(current, nextStatus),
+    );
+    setResultPage(1);
+  };
   const handleResultPageSizeChange = (nextPageSize: number) => {
-    setResultPageSize(nextPageSize)
-    setResultPage(1)
-  }
+    setResultPageSize(nextPageSize);
+    setResultPage(1);
+  };
   const openInvalidAccountAction = (action: InvalidInspectionAccountAction) => {
-    setInvalidAccountAction(action)
-    setSelectedInvalidFileNames(invalidFileNames)
-    setInvalidAccountError('')
-  }
+    setInvalidAccountAction(action);
+    setSelectedInvalidFileNames(invalidFileNames);
+    setInvalidAccountError("");
+  };
   const selectAllInvalidFileNames = () => {
-    setSelectedInvalidFileNames(selectAllInvalidInspectionAccountFileNames(invalidFileNames))
-  }
+    setSelectedInvalidFileNames(
+      selectAllInvalidInspectionAccountFileNames(invalidFileNames),
+    );
+  };
   const invertInvalidFileNames = () => {
-    setSelectedInvalidFileNames((current) => invertInvalidInspectionAccountFileNames(invalidFileNames, current))
-  }
+    setSelectedInvalidFileNames((current) =>
+      invertInvalidInspectionAccountFileNames(invalidFileNames, current),
+    );
+  };
   const closeInvalidAccountAction = () => {
     if (invalidAccountSubmitting) {
-      return
+      return;
     }
-    setInvalidAccountAction(null)
-    setSelectedInvalidFileNames([])
-    setInvalidAccountError('')
-  }
+    setInvalidAccountAction(null);
+    setSelectedInvalidFileNames([]);
+    setInvalidAccountError("");
+  };
   const toggleInvalidFileName = (fileName: string, checked: boolean) => {
     setSelectedInvalidFileNames((current) => {
       if (checked) {
-        return current.includes(fileName) ? current : [...current, fileName]
+        return current.includes(fileName) ? current : [...current, fileName];
       }
-      return current.filter((name) => name !== fileName)
-    })
-  }
+      return current.filter((name) => name !== fileName);
+    });
+  };
   const handleConfirmInvalidAccountAction = async () => {
     if (!invalidAccountAction || selectedInvalidFileNames.length === 0) {
-      return
+      return;
     }
-    setInvalidAccountSubmitting(true)
-    setInvalidAccountError('')
+    setInvalidAccountSubmitting(true);
+    setInvalidAccountError("");
     try {
-      if (invalidAccountAction === 'disable') {
-        await setAuthFilesDisabled(selectedInvalidFileNames, true)
+      if (invalidAccountAction === "disable") {
+        await setAuthFilesDisabled(selectedInvalidFileNames, true);
       } else {
-        await deleteAuthFiles(selectedInvalidFileNames)
+        await deleteAuthFiles(selectedInvalidFileNames);
       }
-      await Promise.all([onRefreshStatus(), onAfterInvalidAccountAction?.()])
-      setInvalidAccountAction(null)
-      setSelectedInvalidFileNames([])
+      await Promise.all([onRefreshStatus(), onAfterInvalidAccountAction?.()]);
+      setInvalidAccountAction(null);
+      setSelectedInvalidFileNames([]);
     } catch (nextError) {
-      setInvalidAccountError(nextError instanceof Error ? nextError.message : t('usage_stats.credentials_inspection_invalid_accounts_failed'))
+      setInvalidAccountError(
+        nextError instanceof Error
+          ? nextError.message
+          : t("usage_stats.credentials_inspection_invalid_accounts_failed"),
+      );
     } finally {
-      setInvalidAccountSubmitting(false)
+      setInvalidAccountSubmitting(false);
     }
-  }
+  };
   const inspectionCloseDisabled = isQuotaInspectionCloseDisabled({
     invalidAccountActionOpen: invalidAccountAction !== null,
     invalidAccountSubmitting,
-  })
-  const scheduleMax = AUTO_REFRESH_SCHEDULE_LIMITS[scheduleUnit]
+  });
+  const scheduleMax = AUTO_REFRESH_SCHEDULE_LIMITS[scheduleUnit];
 
   useEffect(() => {
     if (!settingsModalOpen) {
-      setSettingsError('')
-      setSettingsLoaded(false)
-      return
+      setSettingsError("");
+      setSettingsLoaded(false);
+      return;
     }
-    const controller = new AbortController()
-    setSettingsLoading(true)
-    setSettingsLoaded(false)
-    setSettingsError('')
+    const controller = new AbortController();
+    setSettingsLoading(true);
+    setSettingsLoaded(false);
+    setSettingsError("");
     void fetchQuotaAutoRefreshSettings(controller.signal)
       .then((settings) => {
-        if (controller.signal.aborted) return
+        if (controller.signal.aborted) return;
         applyQuotaAutoRefreshSettingsForm(settings, {
           setEnabled: setSettingsEnabled,
           setUnit: setScheduleUnit,
           setValue: setScheduleValue,
-        })
-        setSettingsLoaded(true)
+        });
+        setSettingsLoaded(true);
       })
       .catch((nextError: unknown) => {
-        if (controller.signal.aborted) return
-        const fallback = resolveQuotaAutoRefreshSettingsLoadFailure(nextError, t('usage_stats.credentials_auto_refresh_load_failed'))
+        if (controller.signal.aborted) return;
+        const fallback = resolveQuotaAutoRefreshSettingsLoadFailure(
+          nextError,
+          t("usage_stats.credentials_auto_refresh_load_failed"),
+        );
         applyQuotaAutoRefreshSettingsForm(fallback.settings, {
           setEnabled: setSettingsEnabled,
           setUnit: setScheduleUnit,
           setValue: setScheduleValue,
-        })
-        setSettingsLoaded(fallback.loaded)
-        setSettingsError(fallback.error)
+        });
+        setSettingsLoaded(fallback.loaded);
+        setSettingsError(fallback.error);
       })
       .finally(() => {
         if (!controller.signal.aborted) {
-          setSettingsLoading(false)
+          setSettingsLoading(false);
         }
-      })
-    return () => controller.abort()
-  }, [settingsModalOpen, t])
+      });
+    return () => controller.abort();
+  }, [settingsModalOpen, t]);
 
   const handleSaveAutoRefreshSettings = async () => {
-    if (isAutoRefreshSettingsSaveDisabled({ loading: settingsLoading, saving: settingsSaving, loaded: settingsLoaded })) {
-      return
+    if (
+      isAutoRefreshSettingsSaveDisabled({
+        loading: settingsLoading,
+        saving: settingsSaving,
+        loaded: settingsLoaded,
+      })
+    ) {
+      return;
     }
     const nextSettings = buildQuotaAutoRefreshSettings({
       enabled: settingsEnabled,
       unit: scheduleUnit,
       value: scheduleValue,
-    })
-    const errorKey = 'errorKey' in nextSettings ? nextSettings.errorKey : ''
+    });
+    const errorKey = "errorKey" in nextSettings ? nextSettings.errorKey : "";
     if (errorKey) {
-      setSettingsError(t(errorKey, { max: String(scheduleMax) }))
-      return
+      setSettingsError(t(errorKey, { max: String(scheduleMax) }));
+      return;
     }
-    const settingsToSave = nextSettings.settings
+    const settingsToSave = nextSettings.settings;
     if (!settingsToSave) {
-      return
+      return;
     }
-    setSettingsSaving(true)
-    setSettingsError('')
+    setSettingsSaving(true);
+    setSettingsError("");
     try {
-      const saved = await updateQuotaAutoRefreshSettings(settingsToSave)
+      const saved = await updateQuotaAutoRefreshSettings(settingsToSave);
       applyQuotaAutoRefreshSettingsForm(saved, {
         setEnabled: setSettingsEnabled,
         setUnit: setScheduleUnit,
         setValue: setScheduleValue,
-      })
+      });
     } catch (nextError) {
-      setSettingsError(nextError instanceof Error ? nextError.message : t('usage_stats.credentials_auto_refresh_save_failed'))
+      setSettingsError(
+        nextError instanceof Error
+          ? nextError.message
+          : t("usage_stats.credentials_auto_refresh_save_failed"),
+      );
     } finally {
-      setSettingsSaving(false)
+      setSettingsSaving(false);
     }
-  }
+  };
 
   return (
     <Modal
       open={open}
-      title={t('usage_stats.credentials_inspection_title')}
-      onClose={(inspectionCloseDisabled || settingsModalOpen) ? () => undefined : () => {
-        setSettingsModalOpen(false)
-        onClose()
-      }}
+      title={t("usage_stats.credentials_inspection_title")}
+      onClose={
+        inspectionCloseDisabled || settingsModalOpen
+          ? () => undefined
+          : () => {
+              setSettingsModalOpen(false);
+              onClose();
+            }
+      }
       width={820}
       className={styles.credentialInspectionModal}
       closeDisabled={inspectionCloseDisabled || settingsModalOpen}
@@ -823,10 +1201,10 @@ export function QuotaInspectionModal({
         <div className={styles.credentialInspectionTitleBar}>
           <button
             type="button"
-            className={`${styles.credentialInspectionSettingsButton} ${settingsModalOpen ? styles.credentialInspectionSettingsButtonActive : ''}`.trim()}
+            className={`${styles.credentialInspectionSettingsButton} ${settingsModalOpen ? styles.credentialInspectionSettingsButtonActive : ""}`.trim()}
             onClick={() => setSettingsModalOpen(true)}
-            aria-label={t('usage_stats.credentials_auto_refresh_settings')}
-            title={t('usage_stats.credentials_auto_refresh_settings')}
+            aria-label={t("usage_stats.credentials_auto_refresh_settings")}
+            title={t("usage_stats.credentials_auto_refresh_settings")}
             aria-haspopup="dialog"
           >
             <IconSettings size={15} />
@@ -834,27 +1212,40 @@ export function QuotaInspectionModal({
         </div>
         <div className={styles.credentialInspectionSummary}>
           <div className={styles.credentialInspectionMetric}>
-            <span>{t('usage_stats.credentials_inspection_total')}</span>
+            <span>{t("usage_stats.credentials_inspection_total")}</span>
             <strong>{total}</strong>
           </div>
           <div className={styles.credentialInspectionProgressBlock}>
             <div className={styles.credentialInspectionProgressHeader}>
-              <span>{t('usage_stats.credentials_inspection_progress')}</span>
-              <strong>{cached} / {progressTotal} ({progress}%)</strong>
+              <span>{t("usage_stats.credentials_inspection_progress")}</span>
+              <strong>
+                {cached} / {progressTotal} ({progress}%)
+              </strong>
             </div>
             <div
               className={styles.credentialInspectionProgressTrack}
               role="progressbar"
-              aria-label={t('usage_stats.credentials_inspection_progress_aria', { progress: String(progress) })}
+              aria-label={t(
+                "usage_stats.credentials_inspection_progress_aria",
+                { progress: String(progress) },
+              )}
               aria-valuenow={progress}
               aria-valuemin={0}
               aria-valuemax={100}
             >
-              <span className={styles.credentialInspectionProgressFill} style={{ width: `${progress}%` }} />
+              <span
+                className={styles.credentialInspectionProgressFill}
+                style={{ width: `${progress}%` }}
+              />
             </div>
             <div className={styles.credentialInspectionCompletedAt}>
-              <span>{t('usage_stats.credentials_inspection_completed_at')}</span>
-              <strong>{formatInspectionCompletedAt(status?.completed_at) || t('usage_stats.credentials_inspection_not_completed')}</strong>
+              <span>
+                {t("usage_stats.credentials_inspection_completed_at")}
+              </span>
+              <strong>
+                {formatInspectionCompletedAt(status?.completed_at) ||
+                  t("usage_stats.credentials_inspection_not_completed")}
+              </strong>
             </div>
           </div>
           <button
@@ -870,62 +1261,143 @@ export function QuotaInspectionModal({
         </div>
 
         {error && <div className={styles.credentialInlineError}>{error}</div>}
-        {loading && !status && <div className={styles.credentialEmptyState}>{t('common.loading')}</div>}
+        {loading && !status && (
+          <div className={styles.credentialEmptyState}>
+            {t("common.loading")}
+          </div>
+        )}
 
         <div className={styles.credentialInspectionStatsGrid}>
-          <InspectionStatCard tone="normal" label={t('usage_stats.credentials_inspection_normal')} value={status?.normal ?? 0} total={total} filterStatus="normal" active={resultStatusFilter === 'normal'} onSelect={handleSelectResultStatus} />
-          <InspectionStatCard tone="limitReached" label={t('usage_stats.credentials_inspection_limit_reached')} value={status?.limit_reached ?? 0} total={total} filterStatus="limit_reached" active={resultStatusFilter === 'limit_reached'} onSelect={handleSelectResultStatus} />
-          <InspectionStatCard tone="unauthorized" label={t('usage_stats.credentials_inspection_401_402')} value={status?.unauthorized_401_402 ?? 0} total={total} filterStatus="unauthorized_401_402" active={resultStatusFilter === 'unauthorized_401_402'} onSelect={handleSelectResultStatus} />
-          <InspectionStatCard tone="failed" label={t('usage_stats.credentials_inspection_other_failed')} value={status?.other_failed ?? 0} total={total} filterStatus="other_failed" active={resultStatusFilter === 'other_failed'} onSelect={handleSelectResultStatus} />
-          <InspectionStatCard tone="unknown" label={t('usage_stats.credentials_inspection_unknown')} value={status?.unknown ?? 0} total={total} />
+          <InspectionStatCard
+            tone="normal"
+            label={t("usage_stats.credentials_inspection_normal")}
+            value={status?.normal ?? 0}
+            total={total}
+            filterStatus="normal"
+            active={resultStatusFilter === "normal"}
+            onSelect={handleSelectResultStatus}
+          />
+          <InspectionStatCard
+            tone="limitReached"
+            label={t("usage_stats.credentials_inspection_limit_reached")}
+            value={status?.limit_reached ?? 0}
+            total={total}
+            filterStatus="limit_reached"
+            active={resultStatusFilter === "limit_reached"}
+            onSelect={handleSelectResultStatus}
+          />
+          <InspectionStatCard
+            tone="unauthorized"
+            label={t("usage_stats.credentials_inspection_401_402")}
+            value={status?.unauthorized_401_402 ?? 0}
+            total={total}
+            filterStatus="unauthorized_401_402"
+            active={resultStatusFilter === "unauthorized_401_402"}
+            onSelect={handleSelectResultStatus}
+          />
+          <InspectionStatCard
+            tone="failed"
+            label={t("usage_stats.credentials_inspection_other_failed")}
+            value={status?.other_failed ?? 0}
+            total={total}
+            filterStatus="other_failed"
+            active={resultStatusFilter === "other_failed"}
+            onSelect={handleSelectResultStatus}
+          />
+          <InspectionStatCard
+            tone="unknown"
+            label={t("usage_stats.credentials_inspection_unknown")}
+            value={status?.unknown ?? 0}
+            total={total}
+          />
         </div>
 
         <div className={styles.credentialInspectionResultsBlock}>
           <div className={styles.credentialInspectionResultsHeader}>
-            <div className={styles.credentialInspectionResultsTitle}>{t('usage_stats.credentials_inspection_recent_results')}</div>
+            <div className={styles.credentialInspectionResultsTitle}>
+              {t("usage_stats.credentials_inspection_recent_results")}
+            </div>
             {results.length > 0 && (
               <div className={styles.credentialInspectionResultControls}>
                 <div className={styles.credentialInspectionInvalidActions}>
                   <button
                     type="button"
                     className={styles.credentialInspectionInvalidActionButton}
-                    onClick={() => openInvalidAccountAction('disable')}
-                    disabled={invalidFileNames.length === 0 || invalidAccountSubmitting}
+                    onClick={() => openInvalidAccountAction("disable")}
+                    disabled={
+                      invalidFileNames.length === 0 || invalidAccountSubmitting
+                    }
                   >
                     <IconShield size={13} />
-                    <span>{t('usage_stats.credentials_inspection_disable_invalid')}</span>
+                    <span>
+                      {t("usage_stats.credentials_inspection_disable_invalid")}
+                    </span>
                   </button>
                   <button
                     type="button"
                     className={`${styles.credentialInspectionInvalidActionButton} ${styles.credentialInspectionInvalidActionButtonDanger}`.trim()}
-                    onClick={() => openInvalidAccountAction('delete')}
-                    disabled={invalidFileNames.length === 0 || invalidAccountSubmitting}
+                    onClick={() => openInvalidAccountAction("delete")}
+                    disabled={
+                      invalidFileNames.length === 0 || invalidAccountSubmitting
+                    }
                   >
                     <IconTrash2 size={13} />
-                    <span>{t('usage_stats.credentials_inspection_delete_invalid')}</span>
+                    <span>
+                      {t("usage_stats.credentials_inspection_delete_invalid")}
+                    </span>
                   </button>
                 </div>
               </div>
             )}
           </div>
           {resultPageData.total === 0 ? (
-            <div className={styles.credentialEmptyState}>{t('usage_stats.credentials_inspection_empty_results')}</div>
+            <div className={styles.credentialEmptyState}>
+              {t("usage_stats.credentials_inspection_empty_results")}
+            </div>
           ) : (
             <>
               <div className={styles.credentialInspectionResultsTable}>
-                {resultPageData.results.map((result) => <InspectionResultRow key={result.auth_index} result={result} />)}
+                {resultPageData.results.map((result) => (
+                  <InspectionResultRow
+                    key={result.auth_index}
+                    result={result}
+                  />
+                ))}
               </div>
               <div className={styles.credentialInspectionResultsFooter}>
                 <label className={styles.credentialInspectionPageSizeControl}>
-                  <span>{t('usage_stats.rows_per_page')}</span>
-                  <select value={resultPageData.pageSize} onChange={(event) => handleResultPageSizeChange(Number(event.target.value))}>
-                    {INSPECTION_RESULT_PAGE_SIZE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+                  <span>{t("usage_stats.rows_per_page")}</span>
+                  <select
+                    value={resultPageData.pageSize}
+                    onChange={(event) =>
+                      handleResultPageSizeChange(Number(event.target.value))
+                    }
+                  >
+                    {INSPECTION_RESULT_PAGE_SIZE_OPTIONS.map((option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
                   </select>
                 </label>
                 <div className={styles.credentialInspectionPagination}>
-                  <button type="button" onClick={() => setResultPage(resultPageData.page - 1)} disabled={resultPageData.page <= 1}>{t('usage_stats.previous_page')}</button>
-                  <span>{resultPageData.page} / {resultPageData.totalPages}</span>
-                  <button type="button" onClick={() => setResultPage(resultPageData.page + 1)} disabled={resultPageData.page >= resultPageData.totalPages}>{t('usage_stats.next_page')}</button>
+                  <button
+                    type="button"
+                    onClick={() => setResultPage(resultPageData.page - 1)}
+                    disabled={resultPageData.page <= 1}
+                  >
+                    {t("usage_stats.previous_page")}
+                  </button>
+                  <span>
+                    {resultPageData.page} / {resultPageData.totalPages}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setResultPage(resultPageData.page + 1)}
+                    disabled={resultPageData.page >= resultPageData.totalPages}
+                  >
+                    {t("usage_stats.next_page")}
+                  </button>
                 </div>
               </div>
             </>
@@ -956,19 +1428,19 @@ export function QuotaInspectionModal({
         error={settingsError}
         onClose={() => {
           if (!settingsSaving) {
-            setSettingsModalOpen(false)
+            setSettingsModalOpen(false);
           }
         }}
         onEnabledChange={setSettingsEnabled}
         onUnitChange={(unit) => {
-          setScheduleUnit(unit)
-          setScheduleValue('')
+          setScheduleUnit(unit);
+          setScheduleValue("");
         }}
         onValueChange={setScheduleValue}
         onSave={handleSaveAutoRefreshSettings}
       />
     </Modal>
-  )
+  );
 }
 
 export function QuotaAutoRefreshSettingsModal({
@@ -986,31 +1458,40 @@ export function QuotaAutoRefreshSettingsModal({
   onValueChange,
   onSave,
 }: {
-  open: boolean
-  enabled: boolean
-  unit: QuotaAutoRefreshScheduleUnit
-  value: string
-  loading: boolean
-  saving: boolean
-  loaded: boolean
-  error: string
-  onClose: () => void
-  onEnabledChange: (enabled: boolean) => void
-  onUnitChange: (unit: QuotaAutoRefreshScheduleUnit) => void
-  onValueChange: (value: string) => void
-  onSave: () => Promise<void>
+  open: boolean;
+  enabled: boolean;
+  unit: QuotaAutoRefreshScheduleUnit;
+  value: string;
+  loading: boolean;
+  saving: boolean;
+  loaded: boolean;
+  error: string;
+  onClose: () => void;
+  onEnabledChange: (enabled: boolean) => void;
+  onUnitChange: (unit: QuotaAutoRefreshScheduleUnit) => void;
+  onValueChange: (value: string) => void;
+  onSave: () => Promise<void>;
 }) {
-  const { t } = useTranslation()
-  const scheduleMax = AUTO_REFRESH_SCHEDULE_LIMITS[unit]
-  const controlsDisabled = isAutoRefreshSettingsControlDisabled({ loading, saving, loaded })
-  const scheduleControlsDisabled = controlsDisabled || !enabled
-  const saveDisabled = isAutoRefreshSettingsSaveDisabled({ loading, saving, loaded })
-  const scheduleAreaClassName = `${styles.credentialAutoRefreshScheduleArea} ${enabled ? styles.credentialAutoRefreshScheduleAreaActive : ''}`.trim()
+  const { t } = useTranslation();
+  const scheduleMax = AUTO_REFRESH_SCHEDULE_LIMITS[unit];
+  const controlsDisabled = isAutoRefreshSettingsControlDisabled({
+    loading,
+    saving,
+    loaded,
+  });
+  const scheduleControlsDisabled = controlsDisabled || !enabled;
+  const saveDisabled = isAutoRefreshSettingsSaveDisabled({
+    loading,
+    saving,
+    loaded,
+  });
+  const scheduleAreaClassName =
+    `${styles.credentialAutoRefreshScheduleArea} ${enabled ? styles.credentialAutoRefreshScheduleAreaActive : ""}`.trim();
 
   return (
     <Modal
       open={open}
-      title={t('usage_stats.credentials_auto_refresh_settings')}
+      title={t("usage_stats.credentials_auto_refresh_settings")}
       onClose={saving ? () => undefined : onClose}
       width={620}
       className={styles.credentialAutoRefreshSettingsModal}
@@ -1018,10 +1499,22 @@ export function QuotaAutoRefreshSettingsModal({
     >
       <div className={styles.credentialAutoRefreshSettingsPanel}>
         <div className={styles.credentialAutoRefreshSettingsRow}>
-          <label className={`${styles.credentialActiveOnlySwitch} ${controlsDisabled ? styles.credentialActiveOnlySwitchDisabled : ''}`.trim()}>
-            <span className={styles.credentialActiveOnlyLabel}>{t('usage_stats.credentials_auto_refresh_enabled')}</span>
-            <input type="checkbox" checked={enabled} onChange={(event) => onEnabledChange(event.target.checked)} disabled={controlsDisabled} />
-            <span className={styles.credentialActiveOnlyTrack} aria-hidden="true">
+          <label
+            className={`${styles.credentialActiveOnlySwitch} ${controlsDisabled ? styles.credentialActiveOnlySwitchDisabled : ""}`.trim()}
+          >
+            <span className={styles.credentialActiveOnlyLabel}>
+              {t("usage_stats.credentials_auto_refresh_enabled")}
+            </span>
+            <input
+              type="checkbox"
+              checked={enabled}
+              onChange={(event) => onEnabledChange(event.target.checked)}
+              disabled={controlsDisabled}
+            />
+            <span
+              className={styles.credentialActiveOnlyTrack}
+              aria-hidden="true"
+            >
               <span className={styles.credentialActiveOnlyThumb} />
             </span>
           </label>
@@ -1031,20 +1524,40 @@ export function QuotaAutoRefreshSettingsModal({
             onClick={() => void onSave()}
             disabled={saveDisabled}
             aria-busy={saving}
-            aria-label={saving ? t('usage_stats.credentials_auto_refresh_saving') : t('usage_stats.credentials_auto_refresh_save')}
-            title={saving ? t('usage_stats.credentials_auto_refresh_saving') : t('usage_stats.credentials_auto_refresh_save')}
+            aria-label={
+              saving
+                ? t("usage_stats.credentials_auto_refresh_saving")
+                : t("usage_stats.credentials_auto_refresh_save")
+            }
+            title={
+              saving
+                ? t("usage_stats.credentials_auto_refresh_saving")
+                : t("usage_stats.credentials_auto_refresh_save")
+            }
           >
-            {saving ? <LoadingSpinner size={12} /> : t('usage_stats.credentials_auto_refresh_save')}
+            {saving ? (
+              <LoadingSpinner size={12} />
+            ) : (
+              t("usage_stats.credentials_auto_refresh_save")
+            )}
           </button>
         </div>
         <div className={scheduleAreaClassName} aria-hidden={!enabled}>
           <div className={styles.credentialAutoRefreshScheduleGrid}>
-            <div className={styles.credentialAutoRefreshUnitSwitcher} role="group" aria-label={t('usage_stats.credentials_auto_refresh_unit')}>
+            <div
+              className={styles.credentialAutoRefreshUnitSwitcher}
+              role="group"
+              aria-label={t("usage_stats.credentials_auto_refresh_unit")}
+            >
               {AUTO_REFRESH_SCHEDULE_UNITS.map((nextUnit) => (
                 <button
                   key={nextUnit}
                   type="button"
-                  className={nextUnit === unit ? styles.credentialAutoRefreshUnitButtonActive : undefined}
+                  className={
+                    nextUnit === unit
+                      ? styles.credentialAutoRefreshUnitButtonActive
+                      : undefined
+                  }
                   onClick={() => onUnitChange(nextUnit)}
                   aria-pressed={nextUnit === unit}
                   disabled={scheduleControlsDisabled}
@@ -1053,19 +1566,33 @@ export function QuotaAutoRefreshSettingsModal({
                 </button>
               ))}
             </div>
-            {unit === 'week' ? (
+            {unit === "week" ? (
               <label className={styles.credentialAutoRefreshIntervalField}>
-                <span className={styles.credentialAutoRefreshIntervalLabel}>{t('usage_stats.credentials_auto_refresh_weekday')}</span>
-                <select value={value} onChange={(event) => onValueChange(event.target.value)} disabled={scheduleControlsDisabled}>
-                  <option value="">{t('usage_stats.credentials_auto_refresh_select')}</option>
+                <span className={styles.credentialAutoRefreshIntervalLabel}>
+                  {t("usage_stats.credentials_auto_refresh_weekday")}
+                </span>
+                <select
+                  value={value}
+                  onChange={(event) => onValueChange(event.target.value)}
+                  disabled={scheduleControlsDisabled}
+                >
+                  <option value="">
+                    {t("usage_stats.credentials_auto_refresh_select")}
+                  </option>
                   {AUTO_REFRESH_WEEKDAYS.map((weekday) => (
-                    <option key={weekday} value={weekday}>{t(`usage_stats.credentials_auto_refresh_weekday_${weekday}`)}</option>
+                    <option key={weekday} value={weekday}>
+                      {t(
+                        `usage_stats.credentials_auto_refresh_weekday_${weekday}`,
+                      )}
+                    </option>
                   ))}
                 </select>
               </label>
             ) : (
               <label className={styles.credentialAutoRefreshIntervalField}>
-                <span className={styles.credentialAutoRefreshIntervalLabel}>{t('usage_stats.credentials_auto_refresh_value')}</span>
+                <span className={styles.credentialAutoRefreshIntervalLabel}>
+                  {t("usage_stats.credentials_auto_refresh_value")}
+                </span>
                 <input
                   type="number"
                   min={1}
@@ -1075,7 +1602,9 @@ export function QuotaAutoRefreshSettingsModal({
                   onChange={(event) => onValueChange(event.target.value)}
                   disabled={scheduleControlsDisabled}
                 />
-                <span className={styles.credentialAutoRefreshUnitSuffix}>{t(`usage_stats.credentials_auto_refresh_unit_${unit}`)}</span>
+                <span className={styles.credentialAutoRefreshUnitSuffix}>
+                  {t(`usage_stats.credentials_auto_refresh_unit_${unit}`)}
+                </span>
               </label>
             )}
           </div>
@@ -1083,11 +1612,19 @@ export function QuotaAutoRefreshSettingsModal({
             {t(`usage_stats.credentials_auto_refresh_tip_${unit}`)}
           </div>
         </div>
-        {loading && <div className={styles.credentialEmptyState}>{t('common.loading')}</div>}
-        {error && <div className={styles.credentialInlineError} role="alert">{error}</div>}
+        {loading && (
+          <div className={styles.credentialEmptyState}>
+            {t("common.loading")}
+          </div>
+        )}
+        {error && (
+          <div className={styles.credentialInlineError} role="alert">
+            {error}
+          </div>
+        )}
       </div>
     </Modal>
-  )
+  );
 }
 
 function InvalidInspectionAccountModal({
@@ -1103,68 +1640,110 @@ function InvalidInspectionAccountModal({
   onCancel,
   onConfirm,
 }: {
-  open: boolean
-  action: InvalidInspectionAccountAction | null
-  fileNames: string[]
-  selectedFileNames: string[]
-  submitting: boolean
-  error: string
-  onToggleFileName: (fileName: string, checked: boolean) => void
-  onSelectAll: () => void
-  onInvertSelection: () => void
-  onCancel: () => void
-  onConfirm: () => void
+  open: boolean;
+  action: InvalidInspectionAccountAction | null;
+  fileNames: string[];
+  selectedFileNames: string[];
+  submitting: boolean;
+  error: string;
+  onToggleFileName: (fileName: string, checked: boolean) => void;
+  onSelectAll: () => void;
+  onInvertSelection: () => void;
+  onCancel: () => void;
+  onConfirm: () => void;
 }) {
-  const { t } = useTranslation()
-  const actionLabel = action === 'delete' ? t('usage_stats.credentials_inspection_delete_action') : t('usage_stats.credentials_inspection_disable_action')
+  const { t } = useTranslation();
+  const actionLabel =
+    action === "delete"
+      ? t("usage_stats.credentials_inspection_delete_action")
+      : t("usage_stats.credentials_inspection_disable_action");
   return (
     <Modal
       open={open}
-      title={t('usage_stats.credentials_inspection_invalid_accounts_title', { action: actionLabel })}
+      title={t("usage_stats.credentials_inspection_invalid_accounts_title", {
+        action: actionLabel,
+      })}
       onClose={onCancel}
       width={600}
       className={styles.credentialInvalidAccountModal}
       closeDisabled={submitting}
-      footer={(
+      footer={
         <div className={styles.credentialInvalidAccountFooter}>
-          <button type="button" className={styles.credentialInvalidAccountCancelButton} onClick={onCancel} disabled={submitting}>
-            {t('common.cancel')}
+          <button
+            type="button"
+            className={styles.credentialInvalidAccountCancelButton}
+            onClick={onCancel}
+            disabled={submitting}
+          >
+            {t("common.cancel")}
           </button>
           <button
             type="button"
-            className={`${styles.credentialInvalidAccountConfirmButton} ${action === 'delete' ? styles.credentialInvalidAccountConfirmButtonDanger : ''}`.trim()}
+            className={`${styles.credentialInvalidAccountConfirmButton} ${action === "delete" ? styles.credentialInvalidAccountConfirmButtonDanger : ""}`.trim()}
             onClick={onConfirm}
             disabled={submitting || selectedFileNames.length === 0}
             aria-busy={submitting}
           >
             {submitting && <LoadingSpinner size={13} />}
-            <span>{t('usage_stats.credentials_inspection_invalid_accounts_confirm', { action: actionLabel })}</span>
+            <span>
+              {t(
+                "usage_stats.credentials_inspection_invalid_accounts_confirm",
+                { action: actionLabel },
+              )}
+            </span>
           </button>
         </div>
-      )}
+      }
     >
       <div className={styles.credentialInvalidAccountPanel}>
-        <p>{t(action === 'delete' ? 'usage_stats.credentials_inspection_delete_invalid_confirm' : 'usage_stats.credentials_inspection_disable_invalid_confirm')}</p>
-        <div className={styles.credentialInvalidAccountTip}>{t('usage_stats.credentials_inspection_invalid_accounts_sync_tip')}</div>
+        <p>
+          {t(
+            action === "delete"
+              ? "usage_stats.credentials_inspection_delete_invalid_confirm"
+              : "usage_stats.credentials_inspection_disable_invalid_confirm",
+          )}
+        </p>
+        <div className={styles.credentialInvalidAccountTip}>
+          {t("usage_stats.credentials_inspection_invalid_accounts_sync_tip")}
+        </div>
         {error && <div className={styles.credentialInlineError}>{error}</div>}
         <div className={styles.credentialInvalidAccountToolbar}>
-          <span>{selectedFileNames.length} / {fileNames.length}</span>
+          <span>
+            {selectedFileNames.length} / {fileNames.length}
+          </span>
           <div className={styles.credentialInvalidAccountToolbarActions}>
-            <button type="button" onClick={onSelectAll} disabled={submitting || fileNames.length === 0}>
-              {t('usage_stats.credentials_inspection_invalid_accounts_select_all')}
+            <button
+              type="button"
+              onClick={onSelectAll}
+              disabled={submitting || fileNames.length === 0}
+            >
+              {t(
+                "usage_stats.credentials_inspection_invalid_accounts_select_all",
+              )}
             </button>
-            <button type="button" onClick={onInvertSelection} disabled={submitting || fileNames.length === 0}>
-              {t('usage_stats.credentials_inspection_invalid_accounts_invert_selection')}
+            <button
+              type="button"
+              onClick={onInvertSelection}
+              disabled={submitting || fileNames.length === 0}
+            >
+              {t(
+                "usage_stats.credentials_inspection_invalid_accounts_invert_selection",
+              )}
             </button>
           </div>
         </div>
         <div className={styles.credentialInvalidAccountList}>
           {fileNames.map((fileName) => (
-            <label key={fileName} className={styles.credentialInvalidAccountItem}>
+            <label
+              key={fileName}
+              className={styles.credentialInvalidAccountItem}
+            >
               <input
                 type="checkbox"
                 checked={selectedFileNames.includes(fileName)}
-                onChange={(event) => onToggleFileName(fileName, event.target.checked)}
+                onChange={(event) =>
+                  onToggleFileName(fileName, event.target.checked)
+                }
                 disabled={submitting}
               />
               <span>{fileName}</span>
@@ -1173,446 +1752,691 @@ function InvalidInspectionAccountModal({
         </div>
       </div>
     </Modal>
-  )
+  );
 }
 
-function InspectionStatCard({ tone, label, value, total, filterStatus, active = false, onSelect }: { tone: InspectionStatTone; label: string; value: number; total: number; filterStatus?: InspectionResultStatusFilter; active?: boolean; onSelect?: (status: InspectionResultStatusFilter) => void }) {
-  const percent = total > 0 ? Math.round((value / total) * 100) : 0
+function InspectionStatCard({
+  tone,
+  label,
+  value,
+  total,
+  filterStatus,
+  active = false,
+  onSelect,
+}: {
+  tone: InspectionStatTone;
+  label: string;
+  value: number;
+  total: number;
+  filterStatus?: InspectionResultStatusFilter;
+  active?: boolean;
+  onSelect?: (status: InspectionResultStatusFilter) => void;
+}) {
+  const percent = total > 0 ? Math.round((value / total) * 100) : 0;
   const content = (
     <>
       <span>{label}</span>
       <strong>{value}</strong>
       <small>{percent}%</small>
     </>
-  )
-  const cardClassName = `${styles.credentialInspectionStatCard} ${styles[`credentialInspectionStatCard${capitalize(tone)}`]}`.trim()
-  if (filterStatus && onSelect && isSelectableInspectionStatusFilter(filterStatus)) {
+  );
+  const cardClassName =
+    `${styles.credentialInspectionStatCard} ${styles[`credentialInspectionStatCard${capitalize(tone)}`]}`.trim();
+  if (
+    filterStatus &&
+    onSelect &&
+    isSelectableInspectionStatusFilter(filterStatus)
+  ) {
     return (
       <button
         type="button"
-        className={`${cardClassName} ${styles.credentialInspectionStatButton} ${active ? styles.credentialInspectionStatButtonActive : ''}`.trim()}
+        className={`${cardClassName} ${styles.credentialInspectionStatButton} ${active ? styles.credentialInspectionStatButtonActive : ""}`.trim()}
         onClick={() => onSelect(filterStatus)}
         aria-pressed={active}
       >
         {content}
       </button>
-    )
+    );
   }
-  return (
-    <div className={cardClassName}>
-      {content}
-    </div>
-  )
+  return <div className={cardClassName}>{content}</div>;
 }
 
-function InspectionResultRow({ result }: { result: UsageQuotaInspectionResult }) {
-  const { t } = useTranslation()
+function InspectionResultRow({
+  result,
+}: {
+  result: UsageQuotaInspectionResult;
+}) {
+  const { t } = useTranslation();
   return (
     <div className={styles.credentialInspectionResultRow}>
       <span className={styles.credentialInspectionTypeIcon}>
         <CredentialProviderFilterIcon provider={result.type} />
       </span>
       <span className={styles.credentialInspectionIdentity}>
-        <strong>{result.name || result.file_name || '-'}</strong>
+        <strong>{result.name || result.file_name || "-"}</strong>
       </span>
-      <span className={`${styles.credentialInspectionStatusPill} ${inspectionResultStatusClassName(result.status)}`.trim()}>
+      <span
+        className={`${styles.credentialInspectionStatusPill} ${inspectionResultStatusClassName(result.status)}`.trim()}
+      >
         {t(inspectionResultLabelKey(result.status))}
       </span>
-      <span className={styles.credentialInspectionCheckedAt}>{formatInspectionDate(result.refreshed_at)}</span>
+      <span className={styles.credentialInspectionCheckedAt}>
+        {formatInspectionDate(result.refreshed_at)}
+      </span>
     </div>
-  )
+  );
 }
 
-function inspectionResultLabelKey(status: UsageQuotaInspectionResult['status']): string {
+function inspectionResultLabelKey(
+  status: UsageQuotaInspectionResult["status"],
+): string {
   switch (status) {
-    case 'normal':
-      return 'usage_stats.credentials_inspection_normal'
-    case 'limit_reached':
-      return 'usage_stats.credentials_inspection_limit_reached'
-    case 'unauthorized_401':
-      return 'usage_stats.credentials_inspection_401'
-    case 'payment_required_402':
-      return 'usage_stats.credentials_inspection_402'
+    case "normal":
+      return "usage_stats.credentials_inspection_normal";
+    case "limit_reached":
+      return "usage_stats.credentials_inspection_limit_reached";
+    case "unauthorized_401":
+      return "usage_stats.credentials_inspection_401";
+    case "payment_required_402":
+      return "usage_stats.credentials_inspection_402";
     default:
-      return 'usage_stats.credentials_inspection_other_failed'
+      return "usage_stats.credentials_inspection_other_failed";
   }
 }
 
-function inspectionResultStatusClassName(status: UsageQuotaInspectionResult['status']): string {
+function inspectionResultStatusClassName(
+  status: UsageQuotaInspectionResult["status"],
+): string {
   switch (status) {
-    case 'normal':
-      return styles.credentialInspectionStatusNormal
-    case 'limit_reached':
-      return styles.credentialInspectionStatusLimitReached
-    case 'unauthorized_401':
-      return styles.credentialInspectionStatusUnauthorized
-    case 'payment_required_402':
-      return styles.credentialInspectionStatusPayment
+    case "normal":
+      return styles.credentialInspectionStatusNormal;
+    case "limit_reached":
+      return styles.credentialInspectionStatusLimitReached;
+    case "unauthorized_401":
+      return styles.credentialInspectionStatusUnauthorized;
+    case "payment_required_402":
+      return styles.credentialInspectionStatusPayment;
     default:
-      return styles.credentialInspectionStatusFailed
+      return styles.credentialInspectionStatusFailed;
   }
 }
 
 export function formatInspectionCompletedAt(value: string | undefined): string {
   if (!value) {
-    return ''
+    return "";
   }
-  const date = new Date(value)
+  const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
-    return ''
+    return "";
   }
-  return date.toLocaleString()
+  return date.toLocaleString();
 }
 
 function formatInspectionDate(value: string | undefined): string {
-  return formatInspectionCompletedAt(value)
+  return formatInspectionCompletedAt(value);
 }
 
-function CredentialPlanBadge({ children, tone = 'neutral' }: { children: string; tone?: PlanTypeTone }) {
-  return <span className={`${styles.credentialPlanBadge} ${styles[`credentialPlanBadge${capitalize(tone)}`]}`.trim()}>{children}</span>
+function CredentialPlanBadge({
+  children,
+  tone = "neutral",
+}: {
+  children: string;
+  tone?: PlanTypeTone;
+}) {
+  return (
+    <span
+      className={`${styles.credentialPlanBadge} ${styles[`credentialPlanBadge${capitalize(tone)}`]}`.trim()}
+    >
+      {children}
+    </span>
+  );
 }
 
-function QuotaUsageModeSwitch({ label, mode, onChange }: { label: string; mode: QuotaUsageMode; onChange: (mode: QuotaUsageMode) => void }) {
-  const { t } = useTranslation()
+function QuotaUsageModeSwitch({
+  label,
+  mode,
+  onChange,
+}: {
+  label: string;
+  mode: QuotaUsageMode;
+  onChange: (mode: QuotaUsageMode) => void;
+}) {
+  const { t } = useTranslation();
 
   return (
     <div className={styles.credentialQuotaModeControl}>
       <span>{label}</span>
-      <div className={styles.credentialQuotaModeSwitcher} role="group" aria-label={t('usage_stats.credentials_quota_usage_mode_aria')}>
-        <span className={`${styles.credentialQuotaModeThumb} ${mode === 'estimated' ? styles.credentialQuotaModeThumbEstimated : ''}`.trim()} aria-hidden="true" />
+      <div
+        className={styles.credentialQuotaModeSwitcher}
+        role="group"
+        aria-label={t("usage_stats.credentials_quota_usage_mode_aria")}
+      >
+        <span
+          className={`${styles.credentialQuotaModeThumb} ${mode === "estimated" ? styles.credentialQuotaModeThumbEstimated : ""}`.trim()}
+          aria-hidden="true"
+        />
         <button
           type="button"
-          className={mode === 'current' ? styles.credentialQuotaModeButtonActive : undefined}
-          onClick={() => onChange('current')}
-          aria-pressed={mode === 'current'}
+          className={
+            mode === "current"
+              ? styles.credentialQuotaModeButtonActive
+              : undefined
+          }
+          onClick={() => onChange("current")}
+          aria-pressed={mode === "current"}
         >
-          {t('usage_stats.credentials_quota_usage_mode_current')}
+          {t("usage_stats.credentials_quota_usage_mode_current")}
         </button>
         <button
           type="button"
-          className={mode === 'estimated' ? styles.credentialQuotaModeButtonActive : undefined}
-          onClick={() => onChange('estimated')}
-          aria-pressed={mode === 'estimated'}
+          className={
+            mode === "estimated"
+              ? styles.credentialQuotaModeButtonActive
+              : undefined
+          }
+          onClick={() => onChange("estimated")}
+          aria-pressed={mode === "estimated"}
         >
-          {t('usage_stats.credentials_quota_usage_mode_estimated')}
+          {t("usage_stats.credentials_quota_usage_mode_estimated")}
         </button>
       </div>
     </div>
-  )
+  );
 }
 
-function AuthFileDisplayModeSwitch({ mode, onChange }: { mode: AuthFileDisplayMode; onChange: (mode: AuthFileDisplayMode) => void }) {
-  const { t } = useTranslation()
+function AuthFileDisplayModeSwitch({
+  mode,
+  onChange,
+}: {
+  mode: AuthFileDisplayMode;
+  onChange: (mode: AuthFileDisplayMode) => void;
+}) {
+  const { t } = useTranslation();
 
   return (
     <div className={styles.credentialDisplayModeControl}>
-      <div className={styles.credentialDisplayModeSwitcher} role="group" aria-label={t('usage_stats.credentials_auth_files_display_mode_aria')}>
-        <span className={`${styles.credentialDisplayModeThumb} ${mode === 'health' ? styles.credentialDisplayModeThumbHealth : ''}`.trim()} aria-hidden="true" />
+      <div
+        className={styles.credentialDisplayModeSwitcher}
+        role="group"
+        aria-label={t("usage_stats.credentials_auth_files_display_mode_aria")}
+      >
+        <span
+          className={`${styles.credentialDisplayModeThumb} ${mode === "health" ? styles.credentialDisplayModeThumbHealth : ""}`.trim()}
+          aria-hidden="true"
+        />
         <button
           type="button"
-          className={mode === 'quota' ? styles.credentialDisplayModeButtonActive : undefined}
-          onClick={() => onChange('quota')}
-          aria-pressed={mode === 'quota'}
+          className={
+            mode === "quota"
+              ? styles.credentialDisplayModeButtonActive
+              : undefined
+          }
+          onClick={() => onChange("quota")}
+          aria-pressed={mode === "quota"}
         >
           <IconShield size={12} />
-          <span>{t('usage_stats.credentials_auth_files_display_mode_quota')}</span>
+          <span>
+            {t("usage_stats.credentials_auth_files_display_mode_quota")}
+          </span>
         </button>
         <button
           type="button"
-          className={mode === 'health' ? styles.credentialDisplayModeButtonActive : undefined}
-          onClick={() => onChange('health')}
-          aria-pressed={mode === 'health'}
+          className={
+            mode === "health"
+              ? styles.credentialDisplayModeButtonActive
+              : undefined
+          }
+          onClick={() => onChange("health")}
+          aria-pressed={mode === "health"}
         >
           <IconChartLine size={12} />
-          <span>{t('usage_stats.credentials_auth_files_display_mode_health')}</span>
+          <span>
+            {t("usage_stats.credentials_auth_files_display_mode_health")}
+          </span>
         </button>
       </div>
     </div>
-  )
+  );
 }
 
 export function readStoredAuthFileDisplayMode(): AuthFileDisplayMode {
-  if (typeof window === 'undefined') {
-    return 'quota'
+  if (typeof window === "undefined") {
+    return "quota";
   }
   try {
-    const storedMode = window.localStorage?.getItem(AUTH_FILE_DISPLAY_MODE_STORAGE_KEY)
-    return isAuthFileDisplayMode(storedMode) ? storedMode : 'quota'
+    const storedMode = window.localStorage?.getItem(
+      AUTH_FILE_DISPLAY_MODE_STORAGE_KEY,
+    );
+    return isAuthFileDisplayMode(storedMode) ? storedMode : "quota";
   } catch {
-    return 'quota'
+    return "quota";
   }
 }
 
 export function persistAuthFileDisplayMode(mode: AuthFileDisplayMode): void {
-  if (typeof window === 'undefined') {
-    return
+  if (typeof window === "undefined") {
+    return;
   }
   try {
-    window.localStorage?.setItem(AUTH_FILE_DISPLAY_MODE_STORAGE_KEY, mode)
+    window.localStorage?.setItem(AUTH_FILE_DISPLAY_MODE_STORAGE_KEY, mode);
   } catch {
     // localStorage 可能被隐私模式或浏览器策略禁用，忽略后保持本次页面内状态。
   }
 }
 
-function isAuthFileDisplayMode(value: string | null | undefined): value is AuthFileDisplayMode {
-  return value === 'quota' || value === 'health'
+function isAuthFileDisplayMode(
+  value: string | null | undefined,
+): value is AuthFileDisplayMode {
+  return value === "quota" || value === "health";
 }
 
-export function AuthFileQuotaPanel({ row, quotaUsageMode }: { row: AuthFileCredentialRow; quotaUsageMode: QuotaUsageMode }) {
-  const { t } = useTranslation()
+export function AuthFileQuotaPanel({
+  row,
+  quotaUsageMode,
+}: {
+  row: AuthFileCredentialRow;
+  quotaUsageMode: QuotaUsageMode;
+}) {
+  const { t } = useTranslation();
 
   // 限额区域按加载、错误、刷新中、无缓存、可展示数据的顺序降级。
   if (row.quotaLoading) {
-    return <div className={styles.credentialQuotaStateSlot}><div className={styles.credentialQuotaState}>{t('usage_stats.credentials_quota_loading')}</div></div>
-  }
-  if (row.quotaError) {
-    const errorDisplay = formatQuotaErrorDisplay(row.quotaError)
     return (
       <div className={styles.credentialQuotaStateSlot}>
-        <div className={styles.credentialQuotaErrorSummary} title={errorDisplay.title}>
-          {errorDisplay.code && <span className={styles.credentialQuotaErrorCode}>{errorDisplay.code}</span>}
-          <span className={styles.credentialQuotaErrorMessage}>{errorDisplay.message}</span>
+        <div className={styles.credentialQuotaState}>
+          {t("usage_stats.credentials_quota_loading")}
         </div>
       </div>
-    )
+    );
   }
-  if (row.refreshStatus === 'queued' || row.refreshStatus === 'running') {
-    return <div className={styles.credentialQuotaStateSlot}><div className={styles.credentialQuotaRefreshStatus}>{t(`usage_stats.credentials_refresh_status_${row.refreshStatus}`)}</div></div>
+  if (row.quotaError) {
+    const errorDisplay = formatQuotaErrorDisplay(row.quotaError);
+    return (
+      <div className={styles.credentialQuotaStateSlot}>
+        <div
+          className={styles.credentialQuotaErrorSummary}
+          title={errorDisplay.title}
+        >
+          {errorDisplay.code && (
+            <span className={styles.credentialQuotaErrorCode}>
+              {errorDisplay.code}
+            </span>
+          )}
+          <span className={styles.credentialQuotaErrorMessage}>
+            {errorDisplay.message}
+          </span>
+        </div>
+      </div>
+    );
+  }
+  if (row.refreshStatus === "queued" || row.refreshStatus === "running") {
+    return (
+      <div className={styles.credentialQuotaStateSlot}>
+        <div className={styles.credentialQuotaRefreshStatus}>
+          {t(`usage_stats.credentials_refresh_status_${row.refreshStatus}`)}
+        </div>
+      </div>
+    );
   }
   if (row.displayQuotas.length === 0) {
-    return <div className={styles.credentialQuotaStateSlot}><div className={styles.credentialQuotaState}>{t('usage_stats.credentials_quota_unavailable')}</div></div>
+    return (
+      <div className={styles.credentialQuotaStateSlot}>
+        <div className={styles.credentialQuotaState}>
+          {t("usage_stats.credentials_quota_unavailable")}
+        </div>
+      </div>
+    );
   }
 
   return (
     <div className={styles.credentialQuotaPanel}>
       <div className={styles.credentialQuotaBars}>
         {/* 每个可计算进度的 quota 都独占一个稳定块；不可进度化 quota 在 view model 中已过滤。 */}
-        {row.displayQuotas.map((quota) => <QuotaBar key={quota.key} quota={quota} quotaUsageMode={quotaUsageMode} />)}
+        {row.displayQuotas.map((quota) => (
+          <QuotaBar
+            key={quota.key}
+            quota={quota}
+            quotaUsageMode={quotaUsageMode}
+          />
+        ))}
       </div>
     </div>
-  )
+  );
 }
 
-export function formatQuotaErrorDisplay(error: string | undefined): QuotaErrorDisplay {
-  const title = (error || '').trim()
-  const raw = title || 'Quota refresh failed. Please try again later.'
-  const { code, message } = splitHTTPStatus(raw)
-  const structured = quotaErrorDetailsFromStructuredValue(message || raw)
-  const displayCode = code || structured.code
-  const sourceMessage = structured.message || (isStructuredQuotaErrorValue(message || raw) ? '' : (message || raw))
-  const readableMessage = readableQuotaErrorMessage(sourceMessage, displayCode ? `HTTP ${displayCode}` : 'Quota refresh failed. Please try again later.')
+export function formatQuotaErrorDisplay(
+  error: string | undefined,
+): QuotaErrorDisplay {
+  const title = (error || "").trim();
+  const raw = title || "Quota refresh failed. Please try again later.";
+  const { code, message } = splitHTTPStatus(raw);
+  const structured = quotaErrorDetailsFromStructuredValue(message || raw);
+  const displayCode = code || structured.code;
+  const sourceMessage =
+    structured.message ||
+    (isStructuredQuotaErrorValue(message || raw) ? "" : message || raw);
+  const readableMessage = readableQuotaErrorMessage(
+    sourceMessage,
+    displayCode
+      ? `HTTP ${displayCode}`
+      : "Quota refresh failed. Please try again later.",
+  );
   return {
     code: displayCode,
     message: readableMessage,
     title: raw,
-  }
+  };
 }
 
 function splitHTTPStatus(value: string): { code?: string; message: string } {
-  const trimmed = value.trim()
-  const match = trimmed.match(/^HTTP\s+(\d{3})(?=\D|$)(?::|\s+-)?\s*([\s\S]*)$/i) ?? trimmed.match(/^(\d{3})(?=\D|$)(?::|\s+-)?\s*([\s\S]*)$/)
+  const trimmed = value.trim();
+  const match =
+    trimmed.match(/^HTTP\s+(\d{3})(?=\D|$)(?::|\s+-)?\s*([\s\S]*)$/i) ??
+    trimmed.match(/^(\d{3})(?=\D|$)(?::|\s+-)?\s*([\s\S]*)$/);
   if (!match) {
-    return { message: trimmed }
+    return { message: trimmed };
   }
-  return { code: match[1], message: match[2].trim() }
+  return { code: match[1], message: match[2].trim() };
 }
 
 function readableQuotaErrorMessage(value: string, fallback: string): string {
-  const normalized = (value || fallback).replace(/\s+/g, ' ').trim() || fallback
-  return truncateQuotaErrorMessage(normalized)
+  const normalized =
+    (value || fallback).replace(/\s+/g, " ").trim() || fallback;
+  return truncateQuotaErrorMessage(normalized);
 }
 
-function quotaErrorDetailsFromStructuredValue(value: string, depth = 0): QuotaErrorDetails {
-  const trimmed = value.trim()
-  if (!trimmed || depth > QUOTA_ERROR_PARSE_MAX_DEPTH || !isStructuredQuotaErrorValue(trimmed)) {
-    return {}
+function quotaErrorDetailsFromStructuredValue(
+  value: string,
+  depth = 0,
+): QuotaErrorDetails {
+  const trimmed = value.trim();
+  if (
+    !trimmed ||
+    depth > QUOTA_ERROR_PARSE_MAX_DEPTH ||
+    !isStructuredQuotaErrorValue(trimmed)
+  ) {
+    return {};
   }
   try {
-    return quotaErrorDetailsFromParsedValue(JSON.parse(trimmed), depth + 1)
+    return quotaErrorDetailsFromParsedValue(JSON.parse(trimmed), depth + 1);
   } catch {
-    return {}
+    return {};
   }
 }
 
-function quotaErrorDetailsFromParsedValue(value: unknown, depth: number): QuotaErrorDetails {
+function quotaErrorDetailsFromParsedValue(
+  value: unknown,
+  depth: number,
+): QuotaErrorDetails {
   if (depth > QUOTA_ERROR_PARSE_MAX_DEPTH) {
-    return {}
+    return {};
   }
-  if (typeof value === 'string') {
-    const trimmed = value.trim()
+  if (typeof value === "string") {
+    const trimmed = value.trim();
     if (!trimmed) {
-      return {}
+      return {};
     }
     if (isStructuredQuotaErrorValue(trimmed)) {
-      const structured = quotaErrorDetailsFromStructuredValue(trimmed, depth + 1)
+      const structured = quotaErrorDetailsFromStructuredValue(
+        trimmed,
+        depth + 1,
+      );
       if (structured.code || structured.message) {
-        return structured
+        return structured;
       }
     }
-    const httpStatus = splitHTTPStatus(trimmed)
+    const httpStatus = splitHTTPStatus(trimmed);
     if (httpStatus.code) {
-      return mergeQuotaErrorDetails({ code: httpStatus.code }, quotaErrorDetailsFromStructuredValue(httpStatus.message, depth + 1), { message: httpStatus.message })
+      return mergeQuotaErrorDetails(
+        { code: httpStatus.code },
+        quotaErrorDetailsFromStructuredValue(httpStatus.message, depth + 1),
+        { message: httpStatus.message },
+      );
     }
-    return { message: trimmed }
+    return { message: trimmed };
   }
   if (Array.isArray(value)) {
-    return value.reduce<QuotaErrorDetails>((current, item) => mergeQuotaErrorDetails(current, quotaErrorDetailsFromParsedValue(item, depth + 1)), {})
+    return value.reduce<QuotaErrorDetails>(
+      (current, item) =>
+        mergeQuotaErrorDetails(
+          current,
+          quotaErrorDetailsFromParsedValue(item, depth + 1),
+        ),
+      {},
+    );
   }
-  if (!value || typeof value !== 'object') {
-    return {}
+  if (!value || typeof value !== "object") {
+    return {};
   }
-  const record = value as Record<string, unknown>
-  let details: QuotaErrorDetails = { code: quotaHTTPStatusCodeFromRecord(record) }
-  const nestedKeys = ['body', 'body_text', 'bodyText', 'response', 'data', 'payload', 'error', 'errors']
+  const record = value as Record<string, unknown>;
+  let details: QuotaErrorDetails = {
+    code: quotaHTTPStatusCodeFromRecord(record),
+  };
+  const nestedKeys = [
+    "body",
+    "body_text",
+    "bodyText",
+    "response",
+    "data",
+    "payload",
+    "error",
+    "errors",
+  ];
   // provider 错误常带一层通用 message，真实上游错误在 body/error 等字段里，先解析内层响应体。
   for (const key of nestedKeys) {
     if (!isPreferredNestedQuotaErrorValue(key, record[key])) {
-      continue
+      continue;
     }
-    details = mergeQuotaErrorDetails(details, quotaErrorDetailsFromParsedValue(record[key], depth + 1))
+    details = mergeQuotaErrorDetails(
+      details,
+      quotaErrorDetailsFromParsedValue(record[key], depth + 1),
+    );
     if (details.message) {
-      break
+      break;
     }
   }
   if (!details.message) {
-    for (const key of ['message', 'error_description', 'detail', 'description', 'title', 'reason']) {
-      const value = record[key]
-      if (typeof value !== 'string') {
-        continue
+    for (const key of [
+      "message",
+      "error_description",
+      "detail",
+      "description",
+      "title",
+      "reason",
+    ]) {
+      const value = record[key];
+      if (typeof value !== "string") {
+        continue;
       }
-      const nested = quotaErrorDetailsFromParsedValue(value, depth + 1)
-      details = mergeQuotaErrorDetails(details, nested.message === value.trim() ? { message: value.trim() } : nested)
+      const nested = quotaErrorDetailsFromParsedValue(value, depth + 1);
+      details = mergeQuotaErrorDetails(
+        details,
+        nested.message === value.trim() ? { message: value.trim() } : nested,
+      );
       if (details.message) {
-        break
+        break;
       }
     }
   }
   for (const key of nestedKeys) {
     if (record[key] === undefined) {
-      continue
+      continue;
     }
-    details = mergeQuotaErrorDetails(details, quotaErrorDetailsFromParsedValue(record[key], depth + 1))
+    details = mergeQuotaErrorDetails(
+      details,
+      quotaErrorDetailsFromParsedValue(record[key], depth + 1),
+    );
     if (details.code && details.message) {
-      break
+      break;
     }
   }
-  return details
+  return details;
 }
 
-function isPreferredNestedQuotaErrorValue(key: string, value: unknown): boolean {
+function isPreferredNestedQuotaErrorValue(
+  key: string,
+  value: unknown,
+): boolean {
   if (value === undefined || value === null) {
-    return false
+    return false;
   }
-  if (typeof value !== 'string') {
-    return typeof value === 'object'
+  if (typeof value !== "string") {
+    return typeof value === "object";
   }
-  const trimmed = value.trim()
+  const trimmed = value.trim();
   if (!trimmed) {
-    return false
+    return false;
   }
-  if (['body', 'body_text', 'bodyText', 'response', 'data', 'payload'].includes(key)) {
-    return true
+  if (
+    ["body", "body_text", "bodyText", "response", "data", "payload"].includes(
+      key,
+    )
+  ) {
+    return true;
   }
-  return isStructuredQuotaErrorValue(trimmed) || Boolean(splitHTTPStatus(trimmed).code)
+  return (
+    isStructuredQuotaErrorValue(trimmed) ||
+    Boolean(splitHTTPStatus(trimmed).code)
+  );
 }
 
 function isStructuredQuotaErrorValue(value: string): boolean {
-  const trimmed = value.trim()
-  return ['{', '[', '"'].includes(trimmed[0] ?? '')
+  const trimmed = value.trim();
+  return ["{", "[", '"'].includes(trimmed[0] ?? "");
 }
 
-function quotaHTTPStatusCodeFromRecord(record: Record<string, unknown>): string | undefined {
-  for (const key of ['http_status_code', 'status_code', 'statusCode', 'status', 'code']) {
-    const code = quotaHTTPStatusCode(record[key])
+function quotaHTTPStatusCodeFromRecord(
+  record: Record<string, unknown>,
+): string | undefined {
+  for (const key of [
+    "http_status_code",
+    "status_code",
+    "statusCode",
+    "status",
+    "code",
+  ]) {
+    const code = quotaHTTPStatusCode(record[key]);
     if (code) {
-      return code
+      return code;
     }
   }
-  return undefined
+  return undefined;
 }
 
 function quotaHTTPStatusCode(value: unknown): string | undefined {
-  if (typeof value === 'number' && Number.isInteger(value) && value >= 100 && value <= 599) {
-    return String(value)
+  if (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= 100 &&
+    value <= 599
+  ) {
+    return String(value);
   }
-  if (typeof value !== 'string') {
-    return undefined
+  if (typeof value !== "string") {
+    return undefined;
   }
-  const match = value.trim().match(/^(?:HTTP\s+)?(\d{3})(?:\D|$)/i)
+  const match = value.trim().match(/^(?:HTTP\s+)?(\d{3})(?:\D|$)/i);
   if (!match) {
-    return undefined
+    return undefined;
   }
-  const status = Number(match[1])
+  const status = Number(match[1]);
   if (status < 100 || status > 599) {
-    return undefined
+    return undefined;
   }
-  return match[1]
+  return match[1];
 }
 
-function mergeQuotaErrorDetails(...items: QuotaErrorDetails[]): QuotaErrorDetails {
-  return items.reduce<QuotaErrorDetails>((current, item) => ({
-    code: current.code || item.code,
-    message: current.message || item.message,
-  }), {})
+function mergeQuotaErrorDetails(
+  ...items: QuotaErrorDetails[]
+): QuotaErrorDetails {
+  return items.reduce<QuotaErrorDetails>(
+    (current, item) => ({
+      code: current.code || item.code,
+      message: current.message || item.message,
+    }),
+    {},
+  );
 }
 
 function truncateQuotaErrorMessage(value: string): string {
   if (value.length <= QUOTA_ERROR_MESSAGE_MAX_LENGTH) {
-    return value
+    return value;
   }
-  return `${value.slice(0, QUOTA_ERROR_MESSAGE_MAX_LENGTH).trimEnd()}...`
+  return `${value.slice(0, QUOTA_ERROR_MESSAGE_MAX_LENGTH).trimEnd()}...`;
 }
 
 export function formatQuotaResetLabel(resetAt: string): string {
-  const resetTime = new Date(resetAt)
-  const resetMs = resetTime.getTime()
+  const resetTime = new Date(resetAt);
+  const resetMs = resetTime.getTime();
   if (!Number.isFinite(resetMs)) {
-    return ''
+    return "";
   }
-  const month = String(resetTime.getMonth() + 1).padStart(2, '0')
-  const day = String(resetTime.getDate()).padStart(2, '0')
-  const hour = String(resetTime.getHours()).padStart(2, '0')
-  const minute = String(resetTime.getMinutes()).padStart(2, '0')
-  return `${month}/${day} ${hour}:${minute}`
+  const month = String(resetTime.getMonth() + 1).padStart(2, "0");
+  const day = String(resetTime.getDate()).padStart(2, "0");
+  const hour = String(resetTime.getHours()).padStart(2, "0");
+  const minute = String(resetTime.getMinutes()).padStart(2, "0");
+  return `${month}/${day} ${hour}:${minute}`;
 }
 
 export function formatQuotaResetDuration(resetAt: string): string {
-  const resetMs = new Date(resetAt).getTime()
+  const resetMs = new Date(resetAt).getTime();
   if (!Number.isFinite(resetMs)) {
-    return ''
+    return "";
   }
-  const remainingMinutes = Math.max(0, Math.ceil((resetMs - Date.now()) / 60_000))
-  const days = Math.floor(remainingMinutes / 1_440)
-  const hours = Math.floor((remainingMinutes % 1_440) / 60)
-  const minutes = remainingMinutes % 60
-  return days > 0 ? `${days}d${hours}h${minutes}m` : `${hours}h${minutes}m`
+  const remainingMinutes = Math.max(
+    0,
+    Math.ceil((resetMs - Date.now()) / 60_000),
+  );
+  const days = Math.floor(remainingMinutes / 1_440);
+  const hours = Math.floor((remainingMinutes % 1_440) / 60);
+  const minutes = remainingMinutes % 60;
+  return days > 0 ? `${days}d${hours}h${minutes}m` : `${hours}h${minutes}m`;
 }
 
-export function formatQuotaWindowUsageAriaLabel(t: Translate, windowUsage: NonNullable<DisplayQuota['windowUsage']>): string {
-  return t('usage_stats.credentials_quota_window_usage_aria', {
+export function formatQuotaWindowUsageAriaLabel(
+  t: Translate,
+  windowUsage: NonNullable<DisplayQuota["windowUsage"]>,
+): string {
+  return t("usage_stats.credentials_quota_window_usage_aria", {
     tokens: windowUsage.tokens,
     cost: windowUsage.cost,
-  })
+  });
 }
 
-export function formatQuotaBillingUsageAriaLabel(t: Translate, billingUsage: NonNullable<DisplayQuota['billingUsage']>): string {
-  return t('usage_stats.credentials_quota_billing_usage_aria', {
-    used: billingUsage.used ?? '-',
-    limit: billingUsage.limit ?? '-',
-    remaining: billingUsage.remaining ?? '-',
-  })
+export function formatQuotaBillingUsageAriaLabel(
+  t: Translate,
+  billingUsage: NonNullable<DisplayQuota["billingUsage"]>,
+): string {
+  return t("usage_stats.credentials_quota_billing_usage_aria", {
+    used: billingUsage.used ?? "-",
+    limit: billingUsage.limit ?? "-",
+    remaining: billingUsage.remaining ?? "-",
+  });
 }
 
-function QuotaBar({ quota, quotaUsageMode }: { quota: DisplayQuota; quotaUsageMode: QuotaUsageMode }) {
-  const { t } = useTranslation()
+function QuotaBar({
+  quota,
+  quotaUsageMode,
+}: {
+  quota: DisplayQuota;
+  quotaUsageMode: QuotaUsageMode;
+}) {
+  const { t } = useTranslation();
   // 条宽使用剩余额度百分比，颜色跟随剩余风险状态从绿到黄到红。
-  const percent = quota.barPercent ?? 0
-  const width = `${Math.max(0, Math.min(100, percent))}%`
-  const percentLabel = quota.barPercent === null ? '' : `${Math.round(quota.barPercent)}%`
-  const resetLabel = quota.resetText ? formatQuotaResetLabel(quota.resetText) : ''
-  const resetDuration = quota.resetText ? formatQuotaResetDuration(quota.resetText) : ''
-  const billingUsage = quota.billingUsage
-  const windowUsage = billingUsage ? undefined : quotaWindowUsageForMode(quota, quotaUsageMode)
+  const percent = quota.barPercent ?? 0;
+  const width = `${Math.max(0, Math.min(100, percent))}%`;
+  const percentLabel =
+    quota.barPercent === null ? "" : `${Math.round(quota.barPercent)}%`;
+  const resetLabel = quota.resetText
+    ? formatQuotaResetLabel(quota.resetText)
+    : "";
+  const resetDuration = quota.resetText
+    ? formatQuotaResetDuration(quota.resetText)
+    : "";
+  const billingUsage = quota.billingUsage;
+  const windowUsage = billingUsage
+    ? undefined
+    : quotaWindowUsageForMode(quota, quotaUsageMode);
 
   return (
     <div className={styles.credentialQuotaBarBlock}>
@@ -1622,17 +2446,27 @@ function QuotaBar({ quota, quotaUsageMode }: { quota: DisplayQuota; quotaUsageMo
         </span>
         {(resetDuration || percentLabel) && (
           <span className={styles.credentialQuotaValueGroup}>
-            {resetDuration && <span className={styles.credentialQuotaResetDuration}>{resetDuration}</span>}
+            {resetDuration && (
+              <span className={styles.credentialQuotaResetDuration}>
+                {resetDuration}
+              </span>
+            )}
             {percentLabel && <strong>{percentLabel}</strong>}
           </span>
         )}
       </div>
       <div className={styles.credentialQuotaTrack}>
-        <span className={`${styles.credentialQuotaFill} ${credentialToneClassName('credentialQuotaFill', quota.status)}`.trim()} style={{ width }} />
+        <span
+          className={`${styles.credentialQuotaFill} ${credentialToneClassName("credentialQuotaFill", quota.status)}`.trim()}
+          style={{ width }}
+        />
       </div>
       <div className={styles.credentialQuotaMeta}>
         {billingUsage && (
-          <strong className={styles.credentialQuotaWindowUsage} aria-label={formatQuotaBillingUsageAriaLabel(t, billingUsage)}>
+          <strong
+            className={styles.credentialQuotaWindowUsage}
+            aria-label={formatQuotaBillingUsageAriaLabel(t, billingUsage)}
+          >
             <span className={styles.credentialQuotaUsageMetric}>
               <img src={quotaCostIcon} alt="" aria-hidden="true" />
               <span>{formatQuotaBillingUsageText(billingUsage)}</span>
@@ -1640,7 +2474,10 @@ function QuotaBar({ quota, quotaUsageMode }: { quota: DisplayQuota; quotaUsageMo
           </strong>
         )}
         {windowUsage && (
-          <strong className={styles.credentialQuotaWindowUsage} aria-label={formatQuotaWindowUsageAriaLabel(t, windowUsage)}>
+          <strong
+            className={styles.credentialQuotaWindowUsage}
+            aria-label={formatQuotaWindowUsageAriaLabel(t, windowUsage)}
+          >
             <span className={styles.credentialQuotaUsageMetric}>
               <img src={quotaTokenIcon} alt="" aria-hidden="true" />
               <span>{windowUsage.tokens}</span>
@@ -1654,19 +2491,26 @@ function QuotaBar({ quota, quotaUsageMode }: { quota: DisplayQuota; quotaUsageMo
         {resetLabel && <span>{resetLabel}</span>}
       </div>
     </div>
-  )
+  );
 }
 
-function formatQuotaBillingUsageText(billingUsage: NonNullable<DisplayQuota['billingUsage']>): string {
+function formatQuotaBillingUsageText(
+  billingUsage: NonNullable<DisplayQuota["billingUsage"]>,
+): string {
   if (billingUsage.used && billingUsage.limit) {
-    return `${billingUsage.used} / ${billingUsage.limit}`
+    return `${billingUsage.used} / ${billingUsage.limit}`;
   }
-  return billingUsage.used ?? billingUsage.remaining ?? billingUsage.limit ?? ''
+  return (
+    billingUsage.used ?? billingUsage.remaining ?? billingUsage.limit ?? ""
+  );
 }
 
-function quotaWindowUsageForMode(quota: DisplayQuota, mode: QuotaUsageMode): DisplayQuota['windowUsage'] {
-  if (mode === 'estimated' && quota.windowUsageEstimate) {
-    return quota.windowUsageEstimate
+function quotaWindowUsageForMode(
+  quota: DisplayQuota,
+  mode: QuotaUsageMode,
+): DisplayQuota["windowUsage"] {
+  if (mode === "estimated" && quota.windowUsageEstimate) {
+    return quota.windowUsageEstimate;
   }
-  return quota.windowUsage
+  return quota.windowUsage;
 }

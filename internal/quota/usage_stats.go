@@ -50,11 +50,18 @@ func (s *Service) attachWindowUsageStatsWithProvider(ctx context.Context, authIn
 		// provider pair 不完整时先丢弃单边字段，避免 fallback 失败后输出不同口径的半套数据。
 		response.Quota[index].WindowUsageTokens = nil
 		response.Quota[index].WindowUsageCost = nil
-		// 根据 reset_at 和 window.seconds 计算该 row 对应的统计窗口。
-		windowStart, windowEnd, ok := quotaRowUsageWindow(response.Quota[index], now)
-		// 没有明确窗口或 reset_at 无法解析时跳过该 row。
+		var windowStart, windowEnd time.Time
+		var ok bool
+		if response.Quota[index].AntigravityGeminiPool != nil {
+			// Antigravity pool rows use a fixed lookback instead of the bottleneck model's
+			// resetAt, which may belong to a different cycle and produce an inverted or
+			// near-empty window (e.g. a model that just reset gives a 3-minute window, or
+			// a weekly-reset model produces start > end).
+			windowStart, windowEnd, ok = antigravityPoolUsageWindow(response.Quota[index], now)
+		} else {
+			windowStart, windowEnd, ok = quotaRowUsageWindow(response.Quota[index], now)
+		}
 		if !ok {
-			// 跳过后该 row 不展示窗口 token/cost。
 			continue
 		}
 		// Antigravity 池谓词参与缓存 key，避免不同池（如 Gemini / Claude·GPT）窗口统计互相串用。
@@ -124,6 +131,21 @@ func antigravityPoolCacheKey(geminiPool *bool) string {
 		return string(AntigravityPoolGemini)
 	}
 	return string(AntigravityPoolThirdParty)
+}
+
+// antigravityPoolUsageWindow returns a fixed lookback window [now-windowSeconds, now].
+// Pool rows borrow the bottleneck model's resetAt, but each model in the pool has its
+// own 5h cycle. Using the bottleneck's resetAt for the SQL window produces broken
+// results: a model that just reset gives a near-empty window, a weekly-reset model
+// pushes windowStart into the future. A fixed lookback captures all pool consumption
+// in the last 5 hours regardless of individual model cycles.
+func antigravityPoolUsageWindow(row QuotaRow, now time.Time) (time.Time, time.Time, bool) {
+	if row.Window == nil || row.Window.Seconds == nil || *row.Window.Seconds <= 0 {
+		return time.Time{}, time.Time{}, false
+	}
+	now = timeutil.NormalizeStorageTime(now)
+	windowStart := now.Add(-time.Duration(*row.Window.Seconds) * time.Second)
+	return windowStart, now, true
 }
 
 func quotaRowUsageWindow(row QuotaRow, now time.Time) (time.Time, time.Time, bool) {
