@@ -2,7 +2,6 @@ package quota
 
 import (
 	"context"
-	"sort"
 	"strings"
 	"time"
 
@@ -11,13 +10,15 @@ import (
 )
 
 type quotaUsageWindowKey struct {
-	start  time.Time
-	end    time.Time
-	models string
+	start time.Time
+	end   time.Time
+	// pool 区分全模型统计("")与 Antigravity Gemini/第三方池谓词("gemini"/"third_party")。
+	pool string
 }
 
 type usageWindowStatsProvider interface {
-	SumByAuthIndexAndModels(context.Context, string, time.Time, *time.Time, []string) (repository.UsageWindowStats, error)
+	SumByAuthIndex(context.Context, string, time.Time, *time.Time) (repository.UsageWindowStats, error)
+	SumByAuthIndexAndPoolGemini(context.Context, string, time.Time, *time.Time, bool) (repository.UsageWindowStats, error)
 }
 
 func (s *Service) attachWindowUsageStats(ctx context.Context, authIndex string, response CheckResponse, now time.Time) CheckResponse {
@@ -56,18 +57,24 @@ func (s *Service) attachWindowUsageStatsWithProvider(ctx context.Context, authIn
 			// 跳过后该 row 不展示窗口 token/cost。
 			continue
 		}
-		// 模型过滤集合参与缓存 key，避免不同池（如 Gemini / Claude·GPT）窗口统计互相串用。
-		modelFilter := response.Quota[index].ModelFilter
-		// start/end + 模型集合组成窗口缓存 key，避免同一响应内重复查同一窗口。
-		key := quotaUsageWindowKey{start: windowStart, end: windowEnd, models: modelFilterCacheKey(modelFilter)}
+		// Antigravity 池谓词参与缓存 key，避免不同池（如 Gemini / Claude·GPT）窗口统计互相串用。
+		geminiPool := response.Quota[index].AntigravityGeminiPool
+		// start/end + 池标识组成窗口缓存 key，避免同一响应内重复查同一窗口。
+		key := quotaUsageWindowKey{start: windowStart, end: windowEnd, pool: antigravityPoolCacheKey(geminiPool)}
 		// 先尝试复用本次响应内已经查询过的窗口统计。
 		stats, ok := statsByWindow[key]
 		// 没有缓存时才真正查询 repository。
 		if !ok {
 			// repository 内部会按窗口长度选择 raw group by 或 hourly rollup。
 			var err error
-			// 调用窗口统计查询，end 使用半开区间避免重复累计边界事件；池级 row 按模型集合过滤。
-			stats, err = statsProvider.SumByAuthIndexAndModels(ctx, authIndex, windowStart, &windowEnd, modelFilter)
+			// 调用窗口统计查询，end 使用半开区间避免重复累计边界事件。
+			if geminiPool != nil {
+				// 池级 row 用 Gemini/第三方 LIKE 谓词，和 weekly 行同口径，兼容模型名变体。
+				stats, err = statsProvider.SumByAuthIndexAndPoolGemini(ctx, authIndex, windowStart, &windowEnd, *geminiPool)
+			} else {
+				// 普通 row 统计全模型用量。
+				stats, err = statsProvider.SumByAuthIndex(ctx, authIndex, windowStart, &windowEnd)
+			}
 			// 统计失败不影响 quota 主结果，只跳过当前窗口用量展示。
 			if err != nil {
 				// 当前 row 不写 token/cost，继续处理其它 row。
@@ -107,15 +114,16 @@ func shouldBackfillWindowUsageStats(row QuotaRow) bool {
 	}
 }
 
-func modelFilterCacheKey(models []string) string {
-	// 空过滤集合统一映射成空 key，对应“不限制模型”的全量窗口统计。
-	if len(models) == 0 {
+func antigravityPoolCacheKey(geminiPool *bool) string {
+	// nil 表示不限制池，对应全量窗口统计。
+	if geminiPool == nil {
 		return ""
 	}
-	// 排序后拼接，保证相同模型集合无论顺序如何都命中同一缓存条目。
-	sorted := append([]string(nil), models...)
-	sort.Strings(sorted)
-	return strings.Join(sorted, "\x00")
+	// 两个池映射成稳定标识，确保 Gemini 与第三方池命中不同缓存条目。
+	if *geminiPool {
+		return string(AntigravityPoolGemini)
+	}
+	return string(AntigravityPoolThirdParty)
 }
 
 func quotaRowUsageWindow(row QuotaRow, now time.Time) (time.Time, time.Time, bool) {

@@ -78,6 +78,24 @@ func (c *UsageWindowStatsCalculator) SumByAuthIndexAndModels(ctx context.Context
 	return usageWindowStatsFromTokenStats(rows, c.costResolver), nil
 }
 
+func (c *UsageWindowStatsCalculator) SumByAuthIndexAndPoolGemini(ctx context.Context, authIndex string, start time.Time, end *time.Time, geminiPool bool) (UsageWindowStats, error) {
+	if c == nil || c.db == nil {
+		return UsageWindowStats{}, fmt.Errorf("usage window stats calculator is nil")
+	}
+	authIndex = strings.TrimSpace(authIndex)
+	if authIndex == "" {
+		return UsageWindowStats{}, fmt.Errorf("auth_index is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	rows, err := loadUsageWindowTokenStatsWithPool(c.db.WithContext(ctx), authIndex, start, end, &geminiPool)
+	if err != nil {
+		return UsageWindowStats{}, err
+	}
+	return usageWindowStatsFromTokenStats(rows, c.costResolver), nil
+}
+
 func SumUsageWindowStatsByAuthIndex(ctx context.Context, db *gorm.DB, authIndex string, start time.Time, end *time.Time) (UsageWindowStats, error) {
 	// 无模型过滤时复用带过滤版本，保持旧调用方语义不变。
 	return SumUsageWindowStatsByAuthIndexAndModels(ctx, db, authIndex, start, end, nil)
@@ -104,26 +122,11 @@ const AntigravityPoolModelLike = "%gemini%"
 // (geminiPool=false). Antigravity weekly-cap accumulation uses this because the
 // detector only knows the pool classification rule, not an explicit model list.
 func SumUsageWindowStatsByAuthIndexAndPoolGemini(ctx context.Context, db *gorm.DB, authIndex string, start time.Time, end *time.Time, geminiPool bool) (UsageWindowStats, error) {
-	if db == nil {
-		return UsageWindowStats{}, fmt.Errorf("database is nil")
-	}
-	authIndex = strings.TrimSpace(authIndex)
-	if authIndex == "" {
-		return UsageWindowStats{}, fmt.Errorf("auth_index is required")
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	queryDB := db.WithContext(ctx)
-	costResolver, err := NewUsageCostResolver(ctx, db)
+	calculator, err := NewUsageWindowStatsCalculator(ctx, db)
 	if err != nil {
 		return UsageWindowStats{}, err
 	}
-	rows, err := loadUsageWindowTokenStatsWithPool(queryDB, authIndex, start, end, &geminiPool)
-	if err != nil {
-		return UsageWindowStats{}, err
-	}
-	return usageWindowStatsFromTokenStats(rows, costResolver), nil
+	return calculator.SumByAuthIndexAndPoolGemini(ctx, authIndex, start, end, geminiPool)
 }
 
 func loadUsageWindowTokenStats(db *gorm.DB, authIndex string, start time.Time, end *time.Time, models []string) ([]usageWindowTokenStats, error) {

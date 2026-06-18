@@ -53,10 +53,12 @@ type QuotaRow struct {
 	ResetAfterSeconds *int64       `json:"resetAfterSeconds,omitempty"`
 	WindowUsageTokens *int64       `json:"window_usage_tokens,omitempty"`
 	WindowUsageCost   *float64     `json:"window_usage_cost,omitempty"`
-	// ModelFilter limits window token/cost backfill to a specific set of models.
-	// Used by Antigravity pool rows whose 5h/weekly usage must only count one pool's
-	// models. Empty means no model restriction. Never serialized to the frontend.
-	ModelFilter []string `json:"-"`
+	// AntigravityGeminiPool, when non-nil, restricts window token/cost backfill to
+	// one Antigravity pool using the same Gemini/third-party LIKE predicate as the
+	// weekly rows (true=Gemini pool, false=third-party pool). This avoids an explicit
+	// model list, which misses model-name variants (version/effort suffixes) and made
+	// pool 5h rows report 0 tokens/cost. nil means no pool restriction. Never serialized.
+	AntigravityGeminiPool *bool `json:"-"`
 }
 
 type AntigravityQuotaInfo struct {
