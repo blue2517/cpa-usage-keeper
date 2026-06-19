@@ -205,22 +205,36 @@ function toDisplayQuota(row: UsageQuotaRow): DisplayQuota | undefined {
     return undefined
   }
 
+  const windowUsage = quotaWindowUsage(row)
+  let barPercent = quotaBarPercent(percentDisplay.percent, percentDisplay.kind)
+  let status = quotaStatus(row, percentDisplay.percent, percentDisplay.kind)
+  // 无 cap 的窗口行（如首个 429 前的周池 bootstrap 行）没有百分比，但有 token/cost 值得展示；
+  // 用满格中性进度条承载用量信息，避免被当作 0% 耗尽而过滤掉。
+  if (barPercent === null && isWindowScope(row) && windowUsage) {
+    barPercent = 100
+    status = 'unknown'
+  }
+
   return {
     key: row.key,
     label,
     percent: percentDisplay.percent,
-    barPercent: quotaBarPercent(percentDisplay.percent, percentDisplay.kind),
+    barPercent,
     percentKind: percentDisplay.kind,
     used,
     limit,
     remaining,
     resetText: row.resetAt,
     windowSeconds,
-    windowUsage: quotaWindowUsage(row),
+    windowUsage,
     windowUsageEstimate: quotaWindowUsageEstimate(row, percentDisplay),
     billingUsage: quotaBillingUsage(row),
-    status: quotaStatus(row, percentDisplay.percent, percentDisplay.kind),
+    status,
   }
+}
+
+function isWindowScope(row: UsageQuotaRow): boolean {
+  return (row.scope ?? '').trim().toLowerCase() === 'window'
 }
 
 function quotaBillingUsage(row: UsageQuotaRow): QuotaBillingUsageDisplay | undefined {
@@ -257,21 +271,28 @@ function quotaWindowUsage(row: UsageQuotaRow): QuotaWindowUsageDisplay | undefin
 }
 
 function quotaWindowUsageEstimate(row: UsageQuotaRow, percentDisplay: { percent: number | null; kind: DisplayQuota['percentKind'] }): QuotaWindowUsageDisplay | undefined {
-  // 估算只在已用百分比可外推时生效；0%、满额或免费窗口都继续展示当前值。
+  // 当前周期可外推时按已用比例估算整周期用量。
   const tokens = finiteNumber(row.window_usage_tokens)
   const cost = finiteNumber(row.window_usage_cost)
   const usedPercent = quotaUsedPercent(percentDisplay)
-  if (tokens === undefined || cost === undefined || usedPercent === undefined) {
-    return undefined
+  if (tokens !== undefined && cost !== undefined && usedPercent !== undefined
+    && tokens > 0 && cost > 0 && usedPercent > 0 && usedPercent < 100) {
+    const ratio = usedPercent / 100
+    return {
+      tokens: formatCompactTokenValue(tokens / ratio),
+      cost: formatQuotaWindowCost(cost / ratio),
+    }
   }
-  if (tokens <= 0 || cost <= 0 || usedPercent <= 0 || usedPercent >= 100) {
-    return undefined
+  // 当前周期太新（≈100% 剩余）或已满额无法外推时，回退到后端持久化的上一周期估算值。
+  const prevTokens = finiteNumber(row.prev_cycle_usage_tokens)
+  const prevCost = finiteNumber(row.prev_cycle_usage_cost)
+  if (prevTokens !== undefined && prevCost !== undefined && prevTokens > 0 && prevCost > 0) {
+    return {
+      tokens: formatCompactTokenValue(prevTokens),
+      cost: formatQuotaWindowCost(prevCost),
+    }
   }
-  const ratio = usedPercent / 100
-  return {
-    tokens: formatCompactTokenValue(tokens / ratio),
-    cost: formatQuotaWindowCost(cost / ratio),
-  }
+  return undefined
 }
 
 function formatQuotaWindowCost(cost: number): string {

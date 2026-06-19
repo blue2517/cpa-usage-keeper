@@ -13,6 +13,7 @@ func All() []any {
 		&UsageOverviewHealthStat{},
 		&UsageOverviewAggregationCheckpoint{},
 		&AntigravityWeeklyQuotaState{},
+		&AntigravityFiveHourEstimateState{},
 		&AuthSession{},
 		&AppSetting{},
 	}

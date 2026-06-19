@@ -60,7 +60,21 @@ func HandleAntigravityWeeklyExhaustion(ctx context.Context, db *gorm.DB, e Antig
 		return fmt.Errorf("load antigravity weekly quota state: %w", err)
 	}
 
-	windowStart := resolveWeeklyWindowStart(state, now)
+	// Repeated rejections inside an already-locked window are the upstream still saying
+	// "exhausted"; they must not re-measure the cap or slide the reset forward (which would
+	// keep the pool blocked indefinitely). Only refresh the last-exhausted timestamp.
+	if state != nil && state.Confidence == string(entities.AntigravityWeeklyQuotaConfidenceLocked) && state.LastResetAt != nil {
+		reset := timeutil.NormalizeStorageTime(*state.LastResetAt)
+		if !reset.IsZero() && now.Before(reset) {
+			state.LastExhaustedAt = &now
+			return repository.UpsertAntigravityWeeklyQuotaState(ctx, db, *state)
+		}
+	}
+
+	// New exhaustion: measure the spend accumulated over the current weekly window and lock it
+	// as the estimated cap. WindowStart keeps the measurement window start so the display rows
+	// can show the spend that hit the cap (~100%) until the projected reset.
+	windowStart, _ := currentAntigravityWeeklyWindow(state, now)
 	accumulatedUSD, err := accumulatePoolUSD(ctx, db, e.AuthIndex, pool, windowStart, &now)
 	if err != nil {
 		return fmt.Errorf("accumulate antigravity pool USD: %w", err)
@@ -79,7 +93,7 @@ func HandleAntigravityWeeklyExhaustion(ctx context.Context, db *gorm.DB, e Antig
 	return repository.UpsertAntigravityWeeklyQuotaState(ctx, db, entities.AntigravityWeeklyQuotaState{
 		AuthIndex:         e.AuthIndex,
 		Pool:              string(pool),
-		WindowStart:       nextReset,
+		WindowStart:       windowStart,
 		EstimatedLimitUSD: &accumulatedUSD,
 		LastExhaustedAt:   &now,
 		LastResetAt:       &nextReset,
@@ -87,14 +101,25 @@ func HandleAntigravityWeeklyExhaustion(ctx context.Context, db *gorm.DB, e Antig
 	})
 }
 
-func resolveWeeklyWindowStart(state *entities.AntigravityWeeklyQuotaState, now time.Time) time.Time {
-	if state != nil && !state.WindowStart.IsZero() {
-		ws := timeutil.NormalizeStorageTime(state.WindowStart)
-		if ws.Before(now) {
-			return ws
-		}
+// currentAntigravityWeeklyWindow returns the active [start, reset) weekly window for a state,
+// rolling the persisted window forward by whole weeks until it contains now. A nil or zeroed
+// state falls back to a trailing 7d window ending at now with an unknown (zero) reset.
+func currentAntigravityWeeklyWindow(state *entities.AntigravityWeeklyQuotaState, now time.Time) (start time.Time, reset time.Time) {
+	if state == nil || state.WindowStart.IsZero() {
+		return now.Add(-antigravityWeeklyWindowDefault), time.Time{}
 	}
-	return now.Add(-antigravityWeeklyWindowDefault)
+	start = timeutil.NormalizeStorageTime(state.WindowStart)
+	if state.LastResetAt != nil && !state.LastResetAt.IsZero() {
+		reset = timeutil.NormalizeStorageTime(*state.LastResetAt)
+	} else {
+		reset = start.Add(antigravityWeeklyWindowDefault)
+	}
+	// Advance whole weeks until the window covers now; each elapsed window resets the pool.
+	for !reset.IsZero() && !reset.After(now) {
+		start = reset
+		reset = reset.Add(antigravityWeeklyWindowDefault)
+	}
+	return start, reset
 }
 
 func accumulatePoolUSD(ctx context.Context, db *gorm.DB, authIndex string, pool AntigravityPool, start time.Time, end *time.Time) (float64, error) {

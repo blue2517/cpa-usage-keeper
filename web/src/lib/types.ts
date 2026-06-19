@@ -391,6 +391,8 @@ export interface UsageQuotaRow {
   resetAfterSeconds?: number
   window_usage_tokens?: number
   window_usage_cost?: number
+  prev_cycle_usage_tokens?: number
+  prev_cycle_usage_cost?: number
 }
 
 export interface UsageQuotaCheckResponse {
