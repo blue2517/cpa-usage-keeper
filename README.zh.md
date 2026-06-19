@@ -27,131 +27,15 @@
 - 支持多 Provider quota 窗口用量与限额展示
 - 可维护模型价格，用于成本估算和统计展示
 - 自动同步 CPA Auth Files、API Keys、AI Providers 等 metadata 变化
-- 可选密码登录保护、SQLite 备份、Docker/Docker Compose 和 systemd 部署
+- 可选密码登录保护、SQLite 备份和 systemd 部署
 
 ## 快速开始
 
 > 使用前请确认 CPA 配置已开启 usage 统计：`usage-statistics-enabled: true`。
 
-推荐部署路径：
-
-- 第一次部署 CPA + Keeper：优先使用 [Docker Compose](#docker-compose推荐)。
-- CPA 已在宿主机运行：使用 [Docker](#dockercpa-已在宿主机运行)。
-- 不使用容器：使用 [Linux 二进制](#linux-二进制)。
-
 公网部署建议启用 `AUTH_ENABLED=true`，并配置 `LOGIN_PASSWORD` 保护数据。
 
 ## 部署方式
-
-### Docker Compose（推荐）
-
-下面是一个同时部署 CPA 和 CPA Usage Keeper 的最简参考示例。
-
-仓库中的 `docker-compose.example.yml` 是 Keeper 专用模板。CPA 已经部署好时可以直接使用，也可以把其中的 `cpa-usage-keeper` 服务合并到你自己的 Compose 项目里。
-
-```yaml
-services:
-  cli-proxy-api:
-    image: eceasy/cli-proxy-api:latest
-    container_name: cli-proxy-api
-    restart: unless-stopped
-    ports:
-      - "8317:8317"
-      - "1455:1455"
-    volumes:
-      - ./cpa/config.yaml:/CLIProxyAPI/config.yaml
-      - ./cpa/auths:/root/.cli-proxy-api
-      - ./cpa/logs:/CLIProxyAPI/logs
-    networks:
-      - cpa-network
-
-  cpa-usage-keeper:
-    image: ghcr.io/willxup/cpa-usage-keeper:latest
-    container_name: cpa-usage-keeper
-    restart: unless-stopped
-    depends_on:
-      - cli-proxy-api
-    ports:
-      - "8080:8080"
-    environment:
-      TZ: Asia/Shanghai # 设置容器时区，日志时间会按该时区显示。
-      CPA_BASE_URL: http://cli-proxy-api:8317
-      CPA_MANAGEMENT_KEY: replace-with-your-management-key
-      REDIS_QUEUE_ADDR: cli-proxy-api:8317
-      AUTH_ENABLED: true
-      LOGIN_PASSWORD: replace-with-your-login-password
-    volumes:
-      - ./keeper:/data
-    networks:
-      - cpa-network
-
-networks:
-  cpa-network:
-    driver: bridge
-```
-
-如果想用 `.env` 文件管理 Keeper 配置，可以删除 `cpa-usage-keeper` 服务里的 `environment` 块，并添加 `env_file`：
-
-```yaml
-    env_file:
-      - .env
-    volumes:
-      - ./keeper:/data
-```
-
-然后在宿主机的 `docker-compose.yml` 同一目录创建 `.env` 文件，例如：
-
-```env
-TZ=Asia/Shanghai
-CPA_BASE_URL=http://cli-proxy-api:8317
-CPA_MANAGEMENT_KEY=replace-with-your-management-key
-AUTH_ENABLED=true
-LOGIN_PASSWORD=replace-with-your-login-password
-```
-
-Docker Compose 会把 `.env` 中的配置注入 Keeper 容器环境变量。如果 CPA 使用非默认 Redis/RESP 地址，再在 `.env` 中设置 `REDIS_QUEUE_ADDR`。
-
-启动：
-
-```bash
-docker compose up -d
-```
-
-停止：
-
-```bash
-docker compose down
-```
-
-CPA 文件放在 `./cpa`，CPA Usage Keeper 数据放在 `./keeper`。
-
-### Docker（CPA 已在宿主机运行）
-
-复制配置模板并编辑，至少设置 `CPA_BASE_URL` 和 `CPA_MANAGEMENT_KEY`。公网部署建议同时设置 `AUTH_ENABLED=true` 和 `LOGIN_PASSWORD`。如果 CPA 使用非默认 Redis/RESP 地址，再设置 `REDIS_QUEUE_ADDR`：
-
-```bash
-cp .env.example .env
-vim .env
-```
-
-宿主机运行 CPA 时，`.env` 中通常需要这样设置：
-
-```env
-CPA_BASE_URL=http://host.docker.internal:8317
-CPA_MANAGEMENT_KEY=replace-with-your-management-key
-AUTH_ENABLED=true
-LOGIN_PASSWORD=replace-with-your-login-password
-```
-
-```bash
-docker run -d \
-  --name cpa-usage-keeper \
-  --add-host=host.docker.internal:host-gateway \
-  -p 8080:8080 \
-  -v "$(pwd)/keeper:/data" \
-  --env-file .env \
-  ghcr.io/willxup/cpa-usage-keeper:latest
-```
 
 ### Linux 二进制
 
@@ -166,7 +50,7 @@ tar -xzf cpa-usage-keeper.tar.gz -C cpa-usage-keeper --strip-components=1
 cd cpa-usage-keeper
 ```
 
-请在 Releases 页面复制 `linux_amd64` 或 `linux_arm64` 包的下载地址，并替换上面命令中的占位符。
+请在 Releases 页面复制 `linux_amd64` 包的下载地址，并替换上面命令中的占位符。
 
 #### 配置和运行
 
@@ -213,7 +97,7 @@ cp .env.example .env
 
 | 变量 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `CPA_BASE_URL` | 是 | - | Keeper 服务端访问 CPA 的地址。Docker Compose 内通常是 `http://cli-proxy-api:8317`，可以是内网地址或容器服务名 |
+| `CPA_BASE_URL` | 是 | - | Keeper 服务端访问 CPA 的地址，可以是内网地址或服务主机名 |
 | `CPA_MANAGEMENT_KEY` | 是 | - | CPA management key，用于读取 CPA 管理接口数据 |
 
 ### Web 访问与反代
@@ -228,7 +112,7 @@ cp .env.example .env
 
 `CPA_PUBLIC_URL` 可填写域名、带协议的完整地址或相对路径，例如 `https://cpa.example.com`、`https://cpa.example.com/cpa/` 或 `/cpa/`。前端会自动追加 `management.html`，并兼容末尾已有 `/` 或已经填写到 `management.html` 的情况。未配置时，“返回 CPA”默认跳转到当前浏览器同源根路径下的 `/management.html`；如果 CPA 和 Keeper 的外部域名、端口或路径不一致，请显式设置 `CPA_PUBLIC_URL`。
 
-`CPA_BASE_URL` 只用于服务端访问 CPA，可以是 Docker 内部服务名或内网地址；不要把它当作浏览器跳转地址使用。
+`CPA_BASE_URL` 只用于服务端访问 CPA，可以是服务主机名或内网地址；不要把它当作浏览器跳转地址使用。
 
 ### 登录保护
 

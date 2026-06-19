@@ -27,131 +27,15 @@ It relies on [CLIProxyAPI (CPA)](https://github.com/router-for-me/CLIProxyAPI) a
 - Provider quota window usage and quota display across supported providers
 - Maintain model prices for cost estimation and reporting
 - Automatically sync CPA Auth Files, API Keys, AI Providers, and other metadata changes
-- Optional password login protection, SQLite backups, Docker/Docker Compose, and systemd deployment
+- Optional password login protection, SQLite backups, and systemd deployment
 
 ## Quick Start
 
 > Before using CPA Usage Keeper, make sure CPA usage statistics are enabled: `usage-statistics-enabled: true`.
 
-Recommended deployment path:
-
-- First-time CPA + Keeper deployment: use [Docker Compose](#docker-compose-recommended).
-- CPA already runs on the host: use [Docker](#docker-cpa-already-runs-on-the-host).
-- No containers: use the [Linux binary](#linux-binary).
-
 For public deployments, enable `AUTH_ENABLED=true` and configure `LOGIN_PASSWORD` to protect your data.
 
 ## Deployment
-
-### Docker Compose (Recommended)
-
-The example below is a minimal reference for running CPA and CPA Usage Keeper together.
-
-The repository's `docker-compose.example.yml` is intentionally a Keeper-only template. Use it when CPA is already deployed, or merge its `cpa-usage-keeper` service into your own Compose project.
-
-```yaml
-services:
-  cli-proxy-api:
-    image: eceasy/cli-proxy-api:latest
-    container_name: cli-proxy-api
-    restart: unless-stopped
-    ports:
-      - "8317:8317"
-      - "1455:1455"
-    volumes:
-      - ./cpa/config.yaml:/CLIProxyAPI/config.yaml
-      - ./cpa/auths:/root/.cli-proxy-api
-      - ./cpa/logs:/CLIProxyAPI/logs
-    networks:
-      - cpa-network
-
-  cpa-usage-keeper:
-    image: ghcr.io/willxup/cpa-usage-keeper:latest
-    container_name: cpa-usage-keeper
-    restart: unless-stopped
-    depends_on:
-      - cli-proxy-api
-    ports:
-      - "8080:8080"
-    environment:
-      TZ: Asia/Shanghai # Sets the container timezone; log timestamps use this timezone.
-      CPA_BASE_URL: http://cli-proxy-api:8317
-      CPA_MANAGEMENT_KEY: replace-with-your-management-key
-      REDIS_QUEUE_ADDR: cli-proxy-api:8317
-      AUTH_ENABLED: true
-      LOGIN_PASSWORD: replace-with-your-login-password
-    volumes:
-      - ./keeper:/data
-    networks:
-      - cpa-network
-
-networks:
-  cpa-network:
-    driver: bridge
-```
-
-To manage Keeper settings with a `.env` file, remove the `environment` block from the `cpa-usage-keeper` service and add `env_file`:
-
-```yaml
-    env_file:
-      - .env
-    volumes:
-      - ./keeper:/data
-```
-
-Create `.env` on the host in the same directory as `docker-compose.yml`, for example:
-
-```env
-TZ=Asia/Shanghai
-CPA_BASE_URL=http://cli-proxy-api:8317
-CPA_MANAGEMENT_KEY=replace-with-your-management-key
-AUTH_ENABLED=true
-LOGIN_PASSWORD=replace-with-your-login-password
-```
-
-Docker Compose injects the `.env` values into the Keeper container as environment variables. If CPA uses a non-default Redis/RESP address, also set `REDIS_QUEUE_ADDR` in `.env`.
-
-Start:
-
-```bash
-docker compose up -d
-```
-
-Stop:
-
-```bash
-docker compose down
-```
-
-CPA files are stored under `./cpa`, and CPA Usage Keeper data is stored under `./keeper`.
-
-### Docker (CPA Already Runs On The Host)
-
-Copy and edit the example config. At minimum, set `CPA_BASE_URL` and `CPA_MANAGEMENT_KEY`. For public deployments, also set `AUTH_ENABLED=true` and `LOGIN_PASSWORD`. If CPA uses a non-default Redis/RESP address, also set `REDIS_QUEUE_ADDR`:
-
-```bash
-cp .env.example .env
-vim .env
-```
-
-When CPA runs on the host, `.env` usually needs these values:
-
-```env
-CPA_BASE_URL=http://host.docker.internal:8317
-CPA_MANAGEMENT_KEY=replace-with-your-management-key
-AUTH_ENABLED=true
-LOGIN_PASSWORD=replace-with-your-login-password
-```
-
-```bash
-docker run -d \
-  --name cpa-usage-keeper \
-  --add-host=host.docker.internal:host-gateway \
-  -p 8080:8080 \
-  -v "$(pwd)/keeper:/data" \
-  --env-file .env \
-  ghcr.io/willxup/cpa-usage-keeper:latest
-```
 
 ### Linux Binary
 
@@ -166,7 +50,7 @@ tar -xzf cpa-usage-keeper.tar.gz -C cpa-usage-keeper --strip-components=1
 cd cpa-usage-keeper
 ```
 
-Copy the `linux_amd64` or `linux_arm64` package URL from Releases, then replace the placeholder in the command above.
+Copy the `linux_amd64` package URL from Releases, then replace the placeholder in the command above.
 
 #### Configure And Run
 
@@ -213,7 +97,7 @@ For first-time deployments, start with "Minimum required" and "Web access and re
 
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
-| `CPA_BASE_URL` | Yes | - | URL used by the Keeper server to call CPA. In Docker Compose this is usually `http://cli-proxy-api:8317`, and it can be a private address or container service name |
+| `CPA_BASE_URL` | Yes | - | URL used by the Keeper server to call CPA. It can be a private address or a service hostname |
 | `CPA_MANAGEMENT_KEY` | Yes | - | CPA management key used to read CPA management APIs |
 
 ### Web Access And Reverse Proxy
@@ -228,7 +112,7 @@ For first-time deployments, start with "Minimum required" and "Web access and re
 
 `CPA_PUBLIC_URL` may be a domain, a full URL with scheme, or a relative path, such as `https://cpa.example.com`, `https://cpa.example.com/cpa/`, or `/cpa/`. The frontend appends `management.html` automatically and handles trailing `/` or values that already end in `management.html`. When unset, the "Back to CPA" link points to `/management.html` on the current browser origin. If CPA and Keeper use different public domains, ports, or paths, set `CPA_PUBLIC_URL` explicitly.
 
-`CPA_BASE_URL` is only used by the server to call CPA, so it can be a Docker service name or private network address. Do not use it as the browser navigation URL.
+`CPA_BASE_URL` is only used by the server to call CPA, so it can be a service hostname or private network address. Do not use it as the browser navigation URL.
 
 ### Login Protection
 
