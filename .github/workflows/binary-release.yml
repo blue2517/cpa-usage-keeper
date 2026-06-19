@@ -11,16 +11,6 @@ permissions:
 jobs:
   build-and-release:
     runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - goarch: amd64
-            cc: gcc
-            asset_arch: amd64
-          - goarch: arm64
-            cc: aarch64-linux-gnu-gcc
-            asset_arch: arm64
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -40,7 +30,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
 
       - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install -y build-essential gcc-aarch64-linux-gnu
+        run: sudo apt-get update && sudo apt-get install -y build-essential
 
       - name: Install frontend dependencies
         run: npm --prefix ./web ci
@@ -51,16 +41,13 @@ jobs:
       - name: Build binary package
         env:
           VERSION: ${{ github.ref_name }}
-          GOARCH: ${{ matrix.goarch }}
-          CC: ${{ matrix.cc }}
-          ASSET_ARCH: ${{ matrix.asset_arch }}
         run: |
           set -euo pipefail
-          package_name="cpa-usage-keeper_${VERSION}_linux_${ASSET_ARCH}"
+          package_name="cpa-usage-keeper_${VERSION}_linux_amd64"
           package_dir="dist/${package_name}"
           mkdir -p "${package_dir}/data"
 
-          CGO_ENABLED=1 GOOS=linux GOARCH="${GOARCH}" CC="${CC}" \
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 CC=gcc \
             go build -trimpath -ldflags="-s -w -X cpa-usage-keeper/internal/version.Version=${VERSION}" -o "${package_dir}/cpa-usage-keeper" ./cmd/server/main.go
           cp .env.example README.md README.zh.md LICENSE "${package_dir}/"
           cp deploy/linux/cpa-usage-keeper.service "${package_dir}/"
@@ -71,7 +58,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          asset="dist/cpa-usage-keeper_${{ github.ref_name }}_linux_${{ matrix.asset_arch }}.tar.gz"
+          asset="dist/cpa-usage-keeper_${{ github.ref_name }}_linux_amd64.tar.gz"
           if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
             gh release upload "${{ github.ref_name }}" "${asset}" --clobber
           else
