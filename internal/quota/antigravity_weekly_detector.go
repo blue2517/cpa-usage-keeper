@@ -2,7 +2,9 @@ package quota
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -17,6 +19,7 @@ import (
 const (
 	antigravityExecutorType          = "AntigravityExecutor"
 	antigravityWeeklyWindowDefault   = 7 * 24 * time.Hour
+	antigravityFiveHourWindow        = 5 * time.Hour
 	antigravityQuotaExhaustedKeyword = "QUOTA_EXHAUSTED"
 )
 
@@ -31,7 +34,9 @@ type AntigravityWeeklyExhaustionEvent struct {
 }
 
 // IsAntigravityWeeklyExhaustion returns true if the event represents an Antigravity
-// weekly quota exhaustion (429 with QUOTA_EXHAUSTED in the body).
+// weekly quota exhaustion. A 429 with QUOTA_EXHAUSTED is necessary but not sufficient:
+// the upstream body may carry a retryDelay or reset-time hint. When the parsed delay
+// is ≤ 5 hours the exhaustion belongs to the 5h rolling window, not the weekly cap.
 func IsAntigravityWeeklyExhaustion(e AntigravityWeeklyExhaustionEvent) bool {
 	if !strings.EqualFold(strings.TrimSpace(e.ExecutorType), antigravityExecutorType) {
 		return false
@@ -39,7 +44,68 @@ func IsAntigravityWeeklyExhaustion(e AntigravityWeeklyExhaustionEvent) bool {
 	if e.FailStatusCode != 429 {
 		return false
 	}
-	return strings.Contains(strings.ToUpper(e.FailBody), antigravityQuotaExhaustedKeyword)
+	if !strings.Contains(strings.ToUpper(e.FailBody), antigravityQuotaExhaustedKeyword) {
+		return false
+	}
+	if delay, ok := parseAntigravityRetryDelay(e.FailBody); ok && delay <= antigravityFiveHourWindow {
+		return false
+	}
+	return true
+}
+
+var antigravityRetryAfterRegexp = regexp.MustCompile(`after\s+((?:\d+h)?(?:\d+m)?(?:\d+s)?)\.?`)
+
+type antigravityErrorEnvelope struct {
+	Error struct {
+		Message string                   `json:"message"`
+		Details []map[string]interface{} `json:"details"`
+	} `json:"error"`
+}
+
+// parseAntigravityRetryDelay extracts a retry/reset delay from a Gemini-style 429 body.
+// It checks, in order: RetryInfo.retryDelay, ErrorInfo.metadata.quotaResetDelay, and a
+// human-readable "after Xh Ym Zs" pattern in the error message.
+func parseAntigravityRetryDelay(body string) (time.Duration, bool) {
+	if body == "" {
+		return 0, false
+	}
+	var envelope antigravityErrorEnvelope
+	if err := json.Unmarshal([]byte(body), &envelope); err != nil {
+		return 0, false
+	}
+	for _, detail := range envelope.Error.Details {
+		if strVal(detail["@type"]) == "type.googleapis.com/google.rpc.RetryInfo" {
+			if raw := strVal(detail["retryDelay"]); raw != "" {
+				if d, err := time.ParseDuration(raw); err == nil {
+					return d, true
+				}
+			}
+		}
+	}
+	for _, detail := range envelope.Error.Details {
+		if strVal(detail["@type"]) == "type.googleapis.com/google.rpc.ErrorInfo" {
+			if metadata, ok := detail["metadata"].(map[string]interface{}); ok {
+				if raw := strVal(metadata["quotaResetDelay"]); raw != "" {
+					if d, err := time.ParseDuration(raw); err == nil {
+						return d, true
+					}
+				}
+			}
+		}
+	}
+	if msg := envelope.Error.Message; msg != "" {
+		if matches := antigravityRetryAfterRegexp.FindStringSubmatch(strings.ToLower(msg)); len(matches) > 1 && matches[1] != "" {
+			if d, err := time.ParseDuration(matches[1]); err == nil {
+				return d, true
+			}
+		}
+	}
+	return 0, false
+}
+
+func strVal(v interface{}) string {
+	s, _ := v.(string)
+	return s
 }
 
 // HandleAntigravityWeeklyExhaustion detects weekly quota exhaustion from an ingestion event
