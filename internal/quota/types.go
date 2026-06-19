@@ -44,6 +44,11 @@ type QuotaRow struct {
 	ResetAfterSeconds *int64       `json:"resetAfterSeconds,omitempty"`
 	WindowUsageTokens *int64       `json:"window_usage_tokens,omitempty"`
 	WindowUsageCost   *float64     `json:"window_usage_cost,omitempty"`
+	// PrevCycleUsageTokens/Cost carry the most recent persisted full-cycle projection for an
+	// Antigravity 5h pool. The UI uses them as a fallback estimate while the current cycle is
+	// still too fresh (≈100% remaining) or fully consumed to extrapolate on its own.
+	PrevCycleUsageTokens *int64   `json:"prev_cycle_usage_tokens,omitempty"`
+	PrevCycleUsageCost   *float64 `json:"prev_cycle_usage_cost,omitempty"`
 	// AntigravityGeminiPool, when non-nil, restricts window token/cost backfill to
 	// one Antigravity pool using the same Gemini/third-party LIKE predicate as the
 	// weekly rows (true=Gemini pool, false=third-party pool). This avoids an explicit

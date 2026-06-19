@@ -57,6 +57,8 @@ func TestOrderedMigrationsPreservesExecutionOrder(t *testing.T) {
 		"20260610_remove_usage_event_write_heavy_indexes",
 		"20260611_remove_usage_event_low_value_indexes",
 		"20260612_replace_redis_inbox_queue_key_with_source",
+		"20260615_create_antigravity_weekly_quota_state",
+		"20260619_create_antigravity_five_hour_estimate_state",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("expected ordered migrations %v, got %v", want, got)

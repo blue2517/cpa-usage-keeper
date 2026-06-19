@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"cpa-usage-keeper/internal/entities"
 	"cpa-usage-keeper/internal/repository"
 	"cpa-usage-keeper/internal/timeutil"
 
@@ -12,8 +13,11 @@ import (
 
 const quotaWindowWeeklySeconds int64 = 7 * 24 * 60 * 60
 
-// appendAntigravityWeeklyRows reads the persisted weekly quota state for an auth
-// and appends one weekly-estimate row per pool that has data.
+// appendAntigravityWeeklyRows appends one weekly row per Antigravity pool. A pool with a
+// persisted (locked) cap renders an estimate-vs-cap bar; pools without a cap yet render a
+// bootstrap row showing the running last-7d spend (no percent) so the weekly usage is visible
+// before the first 429. The display window is rolled forward by whole weeks so a window whose
+// projected reset has elapsed restarts from zero instead of accumulating across resets.
 func (s *Service) appendAntigravityWeeklyRows(ctx context.Context, authIndex string, rows []QuotaRow) []QuotaRow {
 	if s.db == nil {
 		return rows
@@ -23,15 +27,20 @@ func (s *Service) appendAntigravityWeeklyRows(ctx context.Context, authIndex str
 		logrus.WithError(err).WithField("auth_index", authIndex).Warn("failed to load antigravity weekly quota states")
 		return rows
 	}
-	if len(states) == 0 {
-		return rows
+	statesByPool := make(map[AntigravityPool]entities.AntigravityWeeklyQuotaState, len(states))
+	for _, state := range states {
+		statesByPool[AntigravityPool(state.Pool)] = state
 	}
 
 	now := timeutil.NormalizeStorageTime(time.Now())
-	for _, state := range states {
-		pool := AntigravityPool(state.Pool)
-		windowStart := timeutil.NormalizeStorageTime(state.WindowStart)
-		if windowStart.IsZero() {
+	for _, pool := range []AntigravityPool{AntigravityPoolGemini, AntigravityPoolThirdParty} {
+		state, locked := statesByPool[pool]
+
+		var windowStart, resetAt time.Time
+		if locked {
+			windowStart, resetAt = currentAntigravityWeeklyWindow(&state, now)
+		} else {
+			// No cap observed yet: show the trailing 7d spend as a bootstrap signal.
 			windowStart = now.Add(-antigravityWeeklyWindowDefault)
 		}
 
@@ -45,6 +54,12 @@ func (s *Service) appendAntigravityWeeklyRows(ctx context.Context, authIndex str
 			continue
 		}
 
+		// Bootstrap rows are only worth showing once the pool has any spend; an idle pool with
+		// no cap and no usage adds noise.
+		if !locked && stats.Tokens == 0 && stats.Cost == 0 {
+			continue
+		}
+
 		row := QuotaRow{
 			Key:               "weekly." + string(pool),
 			Label:             antigravityPoolLabel(pool) + " Weekly",
@@ -55,7 +70,7 @@ func (s *Service) appendAntigravityWeeklyRows(ctx context.Context, authIndex str
 			WindowUsageTokens: intPtr(stats.Tokens),
 		}
 
-		if state.EstimatedLimitUSD != nil && *state.EstimatedLimitUSD > 0 {
+		if locked && state.EstimatedLimitUSD != nil && *state.EstimatedLimitUSD > 0 {
 			row.Limit = state.EstimatedLimitUSD
 			usedPercent := stats.Cost / *state.EstimatedLimitUSD * 100
 			if usedPercent > 100 {
@@ -64,11 +79,8 @@ func (s *Service) appendAntigravityWeeklyRows(ctx context.Context, authIndex str
 			row.UsedPercent = floatPtr(usedPercent)
 		}
 
-		if state.LastResetAt != nil {
-			resetAt := timeutil.NormalizeStorageTime(*state.LastResetAt)
-			if !resetAt.IsZero() {
-				row.ResetAt = resetAt.UTC().Format(time.RFC3339)
-			}
+		if !resetAt.IsZero() {
+			row.ResetAt = resetAt.UTC().Format(time.RFC3339)
 		}
 
 		rows = append(rows, row)

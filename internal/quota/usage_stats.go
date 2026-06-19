@@ -117,18 +117,39 @@ func antigravityPoolCacheKey(geminiPool *bool) string {
 	return string(AntigravityPoolThirdParty)
 }
 
-// antigravityPoolUsageWindow returns a fixed lookback window [now-windowSeconds, now].
-// Pool rows borrow the bottleneck model's resetAt, but each model in the pool has its
-// own 5h cycle. Using the bottleneck's resetAt for the SQL window produces broken
-// results: a model that just reset gives a near-empty window, a weekly-reset model
-// pushes windowStart into the future. A fixed lookback captures all pool consumption
-// in the last 5 hours regardless of individual model cycles.
+// antigravityPoolUsageWindow returns the SQL window for a pool 5h row's token/cost backfill.
+// It aligns the window to the bottleneck model's current cycle [resetAt-5h, now] so the cost
+// shares the same cycle as the displayed used% (which comes from that bottleneck model). This
+// keeps the estimate (cost / used-ratio) consistent: a fresh cycle showing 100% remaining will
+// then report ~0 spend rather than dragging in the previous cycle.
+//
+// The alignment only applies when resetAt is a sane in-progress cycle boundary; otherwise it
+// falls back to a fixed [now-5h, now] lookback. Falling back covers the cases the fixed window
+// was introduced for: a missing/unparseable resetAt, a window start projected into the future,
+// or a resetAt already in the past (the cycle just rolled over and the pool reads ~100%).
 func antigravityPoolUsageWindow(row QuotaRow, now time.Time) (time.Time, time.Time, bool) {
 	if row.Window == nil || row.Window.Seconds == nil || *row.Window.Seconds <= 0 {
 		return time.Time{}, time.Time{}, false
 	}
 	now = timeutil.NormalizeStorageTime(now)
-	windowStart := now.Add(-time.Duration(*row.Window.Seconds) * time.Second)
+	fixedStart := now.Add(-time.Duration(*row.Window.Seconds) * time.Second)
+	if row.ResetAt == "" {
+		return fixedStart, now, true
+	}
+	resetAt, err := timeutil.ParseStorageTime(row.ResetAt)
+	if err != nil {
+		return fixedStart, now, true
+	}
+	resetAt = timeutil.NormalizeStorageTime(resetAt)
+	// resetAt must be in the future (cycle still running) for an aligned window to make sense.
+	if !now.Before(resetAt) {
+		return fixedStart, now, true
+	}
+	windowStart := resetAt.Add(-time.Duration(*row.Window.Seconds) * time.Second)
+	// A window start in the future (resetAt more than one window away) is stale data; fall back.
+	if windowStart.After(now) {
+		return fixedStart, now, true
+	}
 	return windowStart, now, true
 }
 

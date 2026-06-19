@@ -271,6 +271,53 @@ describe('credentialViewModels', () => {
     ])
   })
 
+  it('falls back to the previous cycle estimate when the current 5h cycle cannot be extrapolated', () => {
+    const quotas = new Map<string, UsageQuotaRow[]>([
+      ['auth-1', [
+        // Fresh cycle: 100% remaining (0% used) with no spend, but a prior projection exists.
+        { key: 'pool.gemini', label: 'Gemini 5h', scope: 'window', usedPercent: 0, window: { seconds: 18000 }, window_usage_tokens: 0, window_usage_cost: 0, prev_cycle_usage_tokens: 4_000_000, prev_cycle_usage_cost: 10 },
+        // Maxed cycle: 100% used, prior projection still surfaces as the estimate.
+        { key: 'pool.third_party', label: 'Claude/GPT 5h', scope: 'window', usedPercent: 100, window: { seconds: 18000 }, window_usage_tokens: 5_000, window_usage_cost: 9, prev_cycle_usage_tokens: 5_500, prev_cycle_usage_cost: 9.5 },
+      ]],
+    ])
+
+    const rows = buildAuthFileCredentialRows([identity({ identity: 'auth-1' })], quotas)
+
+    expect(rows[0].displayQuotas.map((quota) => quota.windowUsageEstimate)).toEqual([
+      { tokens: '4.00M', cost: '$10.00' },
+      { tokens: '5.50K', cost: '$9.50' },
+    ])
+  })
+
+  it('prefers the live current-cycle estimate over the persisted previous cycle estimate', () => {
+    const quotas = new Map<string, UsageQuotaRow[]>([
+      ['auth-1', [
+        { key: 'pool.gemini', label: 'Gemini 5h', scope: 'window', usedPercent: 25, window: { seconds: 18000 }, window_usage_tokens: 1_000_000, window_usage_cost: 2.5, prev_cycle_usage_tokens: 9_000_000, prev_cycle_usage_cost: 99 },
+      ]],
+    ])
+
+    const rows = buildAuthFileCredentialRows([identity({ identity: 'auth-1' })], quotas)
+
+    expect(rows[0].displayQuotas[0].windowUsageEstimate).toEqual({ tokens: '4.00M', cost: '$10.00' })
+  })
+
+  it('displays a capless weekly window row as a neutral full bar carrying its usage', () => {
+    const quotas = new Map<string, UsageQuotaRow[]>([
+      ['auth-1', [
+        { key: 'weekly.third_party', label: 'Claude/GPT Weekly', scope: 'window', window: { seconds: 604800 }, window_usage_tokens: 1_580_000, window_usage_cost: 1.99 },
+      ]],
+    ])
+
+    const rows = buildAuthFileCredentialRows([identity({ identity: 'auth-1' })], quotas)
+
+    expect(rows[0].displayQuotas).toHaveLength(1)
+    const quota = rows[0].displayQuotas[0]
+    expect(quota.barPercent).toBe(100)
+    expect(quota.status).toBe('unknown')
+    expect(quota.percent).toBeNull()
+    expect(quota.windowUsage).toEqual({ tokens: '1.58M', cost: '$1.99' })
+  })
+
   it('uses an explicit US locale for quota window cost formatting', () => {
     const numberFormatSpy = vi.spyOn(Intl, 'NumberFormat')
     try {

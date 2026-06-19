@@ -390,7 +390,10 @@ func (s *Service) runRefreshTaskWithWorker(authIndex string) {
 		return
 	}
 	// provider 成功后立即把窗口内 token/cost 补进同一次缓存，前端读取缓存时不再触发额外统计请求。
-	response = s.attachWindowUsageStats(ctx, authIndex, response, time.Now())
+	now := time.Now()
+	response = s.attachWindowUsageStats(ctx, authIndex, response, now)
+	// 在窗口用量补齐后，持久化并回填 Antigravity 5h 池的整周期估算，供新周期满额时回退展示。
+	response = s.attachAntigravityFiveHourEstimates(ctx, authIndex, response, now)
 	// quota rows 和 token/cost 都准备好后，把任务切到 completed 并写入长期成功缓存。
 	s.markRefreshTaskCompleted(authIndex, response)
 }
