@@ -50,6 +50,7 @@ const (
 	migrationReplaceRedisInboxQueueKeyWithSource    = "20260612_replace_redis_inbox_queue_key_with_source"
 	migrationCreateAntigravityWeeklyQuotaState      = "20260615_create_antigravity_weekly_quota_state"
 	migrationCreateAntigravityFiveHourEstimateState = "20260619_create_antigravity_five_hour_estimate_state"
+	migrationResetAntigravityWeeklyQuotaState       = "20260619_reset_antigravity_weekly_quota_state"
 	migrationCreateAuthSessions                     = "20260620_create_auth_sessions"
 	migrationAddUsageIdentityAlias                  = "20260629_add_usage_identity_alias"
 	migrationAddAuthSessionSource                   = "20260701_add_auth_session_source"
@@ -149,6 +150,7 @@ func orderedMigrations() []databaseMigration {
 		{version: migrationReplaceRedisInboxQueueKeyWithSource, run: replaceRedisInboxQueueKeyWithSourceMigration},
 		{version: migrationCreateAntigravityWeeklyQuotaState, run: createAntigravityWeeklyQuotaStateMigration},
 		{version: migrationCreateAntigravityFiveHourEstimateState, run: createAntigravityFiveHourEstimateStateMigration},
+		{version: migrationResetAntigravityWeeklyQuotaState, run: resetAntigravityWeeklyQuotaStateMigration},
 		{version: migrationCreateAuthSessions, run: createAuthSessionsMigration},
 		{version: migrationAddUsageIdentityAlias, run: addUsageIdentityAliasMigration},
 		{version: migrationAddAuthSessionSource, run: addAuthSessionSourceMigration},
