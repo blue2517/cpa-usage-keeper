@@ -8,7 +8,7 @@ type ProviderRegistry struct {
 
 func NewDefaultProviderRegistry(caller ManagementAPICaller, configs ProviderConfigs) ProviderRegistry {
 	return NewProviderRegistry(map[string]ProviderHandler{
-		"antigravity": NewAntigravityProvider(caller, configs.Antigravity...),
+		"antigravity": NewAntigravityProviderWithSummary(caller, configs.Antigravity, configs.AntigravityQuotaSummary),
 		"codex":       NewCodexProvider(caller, configs.Codex),
 		"gemini-cli":  NewGeminiCLIProvider(caller, configs.GeminiCLI, configs.GeminiCLICodeAssist),
 		"claude":      NewClaudeProvider(caller, configs.ClaudeUsage, configs.ClaudeProfile),

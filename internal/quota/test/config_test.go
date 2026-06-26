@@ -9,11 +9,14 @@ import (
 func TestDefaultProviderConfigsContainsSevenAPICallTemplates(t *testing.T) {
 	configs := quota.DefaultProviderConfigs()
 	templates := configs.APICallTemplates()
-	if len(templates) != 10 {
-		t.Fatalf("expected 10 api-call templates, got %d", len(templates))
+	if len(templates) != 13 {
+		t.Fatalf("expected 13 api-call templates, got %d", len(templates))
 	}
 	if len(configs.Antigravity) != 3 {
 		t.Fatalf("expected 3 antigravity api-call templates, got %d", len(configs.Antigravity))
+	}
+	if len(configs.AntigravityQuotaSummary) != 3 {
+		t.Fatalf("expected 3 antigravity quota summary templates, got %d", len(configs.AntigravityQuotaSummary))
 	}
 
 	if configs.Antigravity[0].Method != "POST" || configs.Antigravity[0].URL != "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels" {
@@ -21,6 +24,12 @@ func TestDefaultProviderConfigsContainsSevenAPICallTemplates(t *testing.T) {
 	}
 	if configs.Antigravity[1].URL != "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:fetchAvailableModels" || configs.Antigravity[2].URL != "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels" {
 		t.Fatalf("unexpected antigravity fallback configs: %+v", configs.Antigravity)
+	}
+	if configs.AntigravityQuotaSummary[0].Method != "POST" || configs.AntigravityQuotaSummary[0].URL != "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary" {
+		t.Fatalf("unexpected antigravity quota summary config: %+v", configs.AntigravityQuotaSummary)
+	}
+	if configs.AntigravityQuotaSummary[1].URL != "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:retrieveUserQuotaSummary" || configs.AntigravityQuotaSummary[2].URL != "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary" {
+		t.Fatalf("unexpected antigravity quota summary fallback configs: %+v", configs.AntigravityQuotaSummary)
 	}
 	if configs.Codex.Method != "GET" || configs.Codex.URL != "https://chatgpt.com/backend-api/wham/usage" {
 		t.Fatalf("unexpected codex config: %+v", configs.Codex)

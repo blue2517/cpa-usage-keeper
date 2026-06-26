@@ -61,6 +61,80 @@ func TestAntigravityProviderUsesProjectIDForQuotaRequest(t *testing.T) {
 	}
 }
 
+func TestAntigravityProviderParsesLiveWeeklyBuckets(t *testing.T) {
+	modelsBody := `{"models":{"gemini-3-flash":{"displayName":"Gemini 3 Flash","quotaInfo":{"remainingFraction":1,"resetTime":"2026-06-27T02:29:00Z"}}}}`
+	summaryBody := `{"groups":[` +
+		`{"displayName":"Gemini 模型","buckets":[` +
+		`{"window":"5h","remainingFraction":1,"resetTime":"2026-06-27T02:29:00Z"},` +
+		`{"window":"weekly","remainingFraction":0.96,"resetTime":"2026-07-01T12:00:00Z"}]},` +
+		`{"displayName":"Claude 和 GPT 模型","buckets":[` +
+		`{"window":"5h","remainingFraction":1,"resetTime":"2026-06-27T02:29:00Z"},` +
+		`{"window":"weekly","remainingFraction":0.91,"resetTime":"2026-07-03T16:00:00Z"}]}]}`
+	caller := &recordingManagementCaller{responses: []*apicall.Response{
+		{StatusCode: 200, BodyText: modelsBody, Body: json.RawMessage(modelsBody)},
+		{StatusCode: 200, BodyText: summaryBody, Body: json.RawMessage(summaryBody)},
+	}}
+	configs := quota.DefaultProviderConfigs()
+	provider := quota.NewAntigravityProviderWithSummary(caller, configs.Antigravity[:1], configs.AntigravityQuotaSummary[:1])
+
+	output, err := provider.Check(context.Background(), quota.ProviderInput{Identity: entities.UsageIdentity{
+		Identity:  "ag-auth",
+		ProjectID: stringPtr("project-123"),
+	}})
+	if err != nil {
+		t.Fatalf("Check returned error: %v", err)
+	}
+	result, ok := output.Result.(quota.AntigravityResult)
+	if !ok {
+		t.Fatalf("expected antigravity result type, got %T", output.Result)
+	}
+	if len(result.WeeklyBuckets) != 2 {
+		t.Fatalf("expected two weekly buckets, got %#v", result.WeeklyBuckets)
+	}
+	gemini := result.WeeklyBuckets[quota.AntigravityPoolGemini]
+	if gemini.RemainingFraction != 0.96 || gemini.ResetTime != "2026-07-01T12:00:00Z" {
+		t.Fatalf("unexpected gemini weekly bucket: %#v", gemini)
+	}
+	thirdParty := result.WeeklyBuckets[quota.AntigravityPoolThirdParty]
+	if thirdParty.RemainingFraction != 0.91 || thirdParty.ResetTime != "2026-07-03T16:00:00Z" {
+		t.Fatalf("unexpected third-party weekly bucket: %#v", thirdParty)
+	}
+	if len(caller.requests) != 2 {
+		t.Fatalf("expected model-list + summary requests, got %d", len(caller.requests))
+	}
+	if caller.requests[1].URL != "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary" {
+		t.Fatalf("unexpected summary request URL: %s", caller.requests[1].URL)
+	}
+}
+
+func TestAntigravityProviderToleratesMissingSummary(t *testing.T) {
+	modelsBody := `{"models":{"gemini-3-flash":{"displayName":"Gemini 3 Flash","quotaInfo":{"remainingFraction":1,"resetTime":"2026-06-27T02:29:00Z"}}}}`
+	caller := &recordingManagementCaller{responses: []*apicall.Response{
+		{StatusCode: 200, BodyText: modelsBody, Body: json.RawMessage(modelsBody)},
+		{StatusCode: 500, BodyText: `{"error":"summary unavailable"}`, Body: json.RawMessage(`{"error":"summary unavailable"}`)},
+	}}
+	configs := quota.DefaultProviderConfigs()
+	provider := quota.NewAntigravityProviderWithSummary(caller, configs.Antigravity[:1], configs.AntigravityQuotaSummary[:1])
+
+	output, err := provider.Check(context.Background(), quota.ProviderInput{Identity: entities.UsageIdentity{
+		Identity:  "ag-auth",
+		ProjectID: stringPtr("project-123"),
+	}})
+	if err != nil {
+		t.Fatalf("Check returned error: %v", err)
+	}
+	result, ok := output.Result.(quota.AntigravityResult)
+	if !ok {
+		t.Fatalf("expected antigravity result type, got %T", output.Result)
+	}
+	if result.Quota == nil || result.Quota.Models["gemini-3-flash"].DisplayName != "Gemini 3 Flash" {
+		t.Fatalf("expected model list to survive summary failure, got %#v", result.Quota)
+	}
+	if result.WeeklyBuckets != nil {
+		t.Fatalf("expected nil weekly buckets on summary failure, got %#v", result.WeeklyBuckets)
+	}
+}
+
 func TestAntigravityProviderRejectsMissingProjectID(t *testing.T) {
 	caller := &recordingManagementCaller{}
 	provider := quota.NewAntigravityProvider(caller, quota.DefaultProviderConfigs().Antigravity[0])
