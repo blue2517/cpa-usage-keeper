@@ -257,8 +257,20 @@ type XAIBillingPayload struct {
 	Config *XAIBillingConfig `json:"config,omitempty"`
 }
 
+// AntigravityWeeklyBucket carries the live weekly-window quota for one pool, parsed from
+// retrieveUserQuotaSummary. RemainingFraction is the upstream-reported remaining ratio
+// (0..1) and ResetTime is the absolute weekly reset timestamp (RFC3339). Having this lets
+// the weekly rows report the real reset time and used% without waiting for a 429.
+type AntigravityWeeklyBucket struct {
+	RemainingFraction float64 `json:"remainingFraction"`
+	ResetTime         string  `json:"resetTime,omitempty"`
+}
+
 type AntigravityResult struct {
 	Quota *AntigravityQuotaPayload `json:"quota"`
+	// WeeklyBuckets holds the live weekly quota per pool (gemini/third_party) when the
+	// retrieveUserQuotaSummary call succeeds; nil when only the model list is available.
+	WeeklyBuckets map[AntigravityPool]AntigravityWeeklyBucket `json:"weeklyBuckets,omitempty"`
 }
 
 type CodexResult struct {

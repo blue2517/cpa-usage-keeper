@@ -229,7 +229,7 @@ func (s *Service) Check(ctx context.Context, request CheckRequest) (CheckRespons
 	}
 	rows := NormalizeQuotaRows(providerOutput)
 	if providerOutput.Provider == "antigravity" {
-		rows = s.appendAntigravityWeeklyRows(ctx, authIndex, rows)
+		rows = s.appendAntigravityWeeklyRows(ctx, authIndex, rows, antigravityWeeklyBucketsFromOutput(providerOutput))
 	}
 	response := CheckResponse{
 		ID:    authIndex,
@@ -253,6 +253,24 @@ func (s *Service) resolveQuotaHandler(provider string, identityType string) (str
 
 func (s *Service) resolveQuotaHandlerForIdentity(identity entities.UsageIdentity) (string, ProviderHandler, bool) {
 	return s.resolveQuotaHandler(identity.Provider, identity.Type)
+}
+
+// antigravityWeeklyBucketsFromOutput pulls the live per-pool weekly buckets out of an
+// Antigravity provider output, tolerating both value and pointer result forms. Returns nil
+// when the summary call did not yield weekly data, in which case weekly rows fall back to
+// the 429-based estimate.
+func antigravityWeeklyBucketsFromOutput(output ProviderOutput) map[AntigravityPool]AntigravityWeeklyBucket {
+	switch result := output.Result.(type) {
+	case AntigravityResult:
+		return result.WeeklyBuckets
+	case *AntigravityResult:
+		if result == nil {
+			return nil
+		}
+		return result.WeeklyBuckets
+	default:
+		return nil
+	}
 }
 
 func resolveQuotaIdentityTypes(provider string, identityType string) []string {

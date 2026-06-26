@@ -42,6 +42,72 @@ func parseAntigravityQuotaPayload(response *apicall.Response) (*AntigravityQuota
 	return payload, nil
 }
 
+// parseAntigravityWeeklyBuckets extracts the live weekly-window quota per pool from a
+// retrieveUserQuotaSummary response. Each group maps to a pool by display name (Gemini vs
+// the Claude/GPT third-party pool); within a group the bucket whose window is "weekly"
+// supplies the remaining fraction and absolute reset time. Groups or buckets without a
+// usable weekly window are skipped, so a partial payload still yields whatever pools it can.
+func parseAntigravityWeeklyBuckets(response *apicall.Response) (map[AntigravityPool]AntigravityWeeklyBucket, error) {
+	object, err := parseResponseObject(response)
+	if err != nil {
+		return nil, err
+	}
+	if _, ok := object["groups"]; !ok {
+		if nested := objectField(object, "body"); nested != nil {
+			object = nested
+		}
+	}
+	buckets := map[AntigravityPool]AntigravityWeeklyBucket{}
+	for _, rawGroup := range arrayField(object, "groups") {
+		groupObject := rawObject(rawGroup)
+		if groupObject == nil {
+			continue
+		}
+		pool := classifyAntigravitySummaryPool(stringField(groupObject, "displayName", "display_name"))
+		for _, rawBucket := range arrayField(groupObject, "buckets") {
+			bucketObject := rawObject(rawBucket)
+			if bucketObject == nil {
+				continue
+			}
+			if !isAntigravityWeeklyWindow(stringField(bucketObject, "window")) {
+				continue
+			}
+			fraction, ok := floatValue(bucketObject, "remainingFraction", "remaining_fraction")
+			if !ok {
+				continue
+			}
+			buckets[pool] = AntigravityWeeklyBucket{
+				RemainingFraction: fraction,
+				ResetTime:         stringField(bucketObject, "resetTime", "reset_time"),
+			}
+		}
+	}
+	if len(buckets) == 0 {
+		return nil, nil
+	}
+	return buckets, nil
+}
+
+// classifyAntigravitySummaryPool maps a quota group's display name to its pool. Any group
+// whose name mentions Gemini is the Gemini pool; everything else (Claude/GPT/OSS) shares the
+// third-party pool, matching ClassifyAntigravityPool's model-name based split.
+func classifyAntigravitySummaryPool(groupName string) AntigravityPool {
+	if strings.Contains(strings.ToLower(strings.TrimSpace(groupName)), "gemini") {
+		return AntigravityPoolGemini
+	}
+	return AntigravityPoolThirdParty
+}
+
+// isAntigravityWeeklyWindow reports whether a bucket window string denotes the weekly window.
+func isAntigravityWeeklyWindow(window string) bool {
+	switch strings.ToLower(strings.TrimSpace(window)) {
+	case "weekly", "week":
+		return true
+	default:
+		return false
+	}
+}
+
 func parseCodexUsagePayload(response *apicall.Response) (*CodexUsagePayload, error) {
 	object, err := parseResponseObject(response)
 	if err != nil {
